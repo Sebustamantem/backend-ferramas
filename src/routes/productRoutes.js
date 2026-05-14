@@ -1,0 +1,20 @@
+import { Router } from "express"
+import {
+    getProducts,
+    getProductById,
+    createProduct,
+    updateProduct,
+    deleteProduct
+} from "../controllers/productController.js"
+import { verifyToken, verifyAdmin } from "../middleware/authMiddleware.js"
+import { upload } from "../config/cloudinary.js"
+
+const router = Router()
+
+router.get("/", getProducts)
+router.get("/:id", getProductById)
+router.post("/", verifyToken, verifyAdmin, upload.single("image"), createProduct)
+router.put("/:id", verifyToken, verifyAdmin, upload.single("image"), updateProduct)
+router.delete("/:id", verifyToken, verifyAdmin, deleteProduct)
+
+export default router
