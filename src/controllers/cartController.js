@@ -1,6 +1,5 @@
 import pool from "../config/db.js"
 
-// Limpiar reservas expiradas y devolver stock
 const releaseExpiredReservations = async () => {
     const expired = await pool.query(
         `SELECT * FROM stock_reservations WHERE expires_at < NOW()`
@@ -37,7 +36,6 @@ export const addToCart = async (req, res) => {
         await releaseExpiredReservations()
         await client.query("BEGIN")
 
-        // Verificar stock disponible
         const productResult = await client.query(
             "SELECT * FROM products WHERE id = $1 FOR UPDATE",
             [product_id]
@@ -53,7 +51,6 @@ export const addToCart = async (req, res) => {
             return res.status(400).json({ message: "Stock insuficiente" })
         }
 
-        // Verificar si ya está en el carrito
         const existing = await client.query(
             "SELECT * FROM cart_items WHERE user_id = $1 AND product_id = $2",
             [req.user.id, product_id]
@@ -64,7 +61,6 @@ export const addToCart = async (req, res) => {
                 "UPDATE cart_items SET quantity = quantity + $1 WHERE user_id = $2 AND product_id = $3",
                 [quantity, req.user.id, product_id]
             )
-            // Actualizar reserva existente
             await client.query(
                 `UPDATE stock_reservations 
          SET quantity = quantity + $1, expires_at = NOW() + INTERVAL '10 minutes'
@@ -76,7 +72,6 @@ export const addToCart = async (req, res) => {
                 "INSERT INTO cart_items (user_id, product_id, quantity) VALUES ($1, $2, $3)",
                 [req.user.id, product_id, quantity]
             )
-            // Crear reserva
             await client.query(
                 `INSERT INTO stock_reservations (user_id, product_id, quantity, expires_at)
          VALUES ($1, $2, $3, NOW() + INTERVAL '10 minutes')`,
@@ -84,7 +79,6 @@ export const addToCart = async (req, res) => {
             )
         }
 
-        // Descontar stock temporalmente
         await client.query(
             "UPDATE products SET stock = stock - $1 WHERE id = $2",
             [quantity, product_id]
@@ -100,13 +94,73 @@ export const addToCart = async (req, res) => {
     }
 }
 
+export const updateQuantity = async (req, res) => {
+    const { productId } = req.params
+    const { quantity } = req.body
+    const client = await pool.connect()
+    try {
+        await client.query("BEGIN")
+
+        const cartItem = await client.query(
+            "SELECT * FROM cart_items WHERE user_id = $1 AND product_id = $2",
+            [req.user.id, productId]
+        )
+
+        if (cartItem.rows.length === 0) {
+            await client.query("ROLLBACK")
+            return res.status(404).json({ message: "Producto no encontrado en carrito" })
+        }
+
+        const oldQuantity = cartItem.rows[0].quantity
+        const diff = quantity - oldQuantity
+
+        if (diff > 0) {
+            const product = await client.query(
+                "SELECT stock FROM products WHERE id = $1 FOR UPDATE",
+                [productId]
+            )
+            if (product.rows[0].stock < diff) {
+                await client.query("ROLLBACK")
+                return res.status(400).json({ message: "Stock insuficiente" })
+            }
+            await client.query(
+                "UPDATE products SET stock = stock - $1 WHERE id = $2",
+                [diff, productId]
+            )
+        } else {
+            await client.query(
+                "UPDATE products SET stock = stock + $1 WHERE id = $2",
+                [Math.abs(diff), productId]
+            )
+        }
+
+        await client.query(
+            "UPDATE cart_items SET quantity = $1 WHERE user_id = $2 AND product_id = $3",
+            [quantity, req.user.id, productId]
+        )
+
+        await client.query(
+            `UPDATE stock_reservations SET quantity = $1, expires_at = NOW() + INTERVAL '10 minutes'
+       WHERE user_id = $2 AND product_id = $3`,
+            [quantity, req.user.id, productId]
+        )
+
+        await client.query("COMMIT")
+        res.json({ message: "Cantidad actualizada" })
+    } catch (err) {
+        await client.query("ROLLBACK")
+        res.status(500).json({ message: "Error al actualizar cantidad", error: err.message })
+    } finally {
+        client.release()
+    }
+}
+
 export const removeFromCart = async (req, res) => {
     const { productId } = req.params
     const client = await pool.connect()
     try {
         await client.query("BEGIN")
 
-        // Obtener cantidad del carrito
         const cartItem = await client.query(
             "SELECT * FROM cart_items WHERE user_id = $1 AND product_id = $2",
             [req.user.id, productId]
@@ -114,20 +168,14 @@ export const removeFromCart = async (req, res) => {
 
         if (cartItem.rows.length > 0) {
             const quantity = cartItem.rows[0].quantity
-
-            // Devolver stock
             await client.query(
                 "UPDATE products SET stock = stock + $1 WHERE id = $2",
                 [quantity, productId]
             )
-
-            // Eliminar reserva
             await client.query(
                 "DELETE FROM stock_reservations WHERE user_id = $1 AND product_id = $2",
                 [req.user.id, productId]
             )
-
-            // Eliminar del carrito
             await client.query(
                 "DELETE FROM cart_items WHERE user_id = $1 AND product_id = $2",
                 [req.user.id, productId]
@@ -149,13 +197,11 @@ export const clearCart = async (req, res) => {
     try {
         await client.query("BEGIN")
 
-        // Obtener todos los items del carrito
         const cartItems = await client.query(
             "SELECT * FROM cart_items WHERE user_id = $1",
             [req.user.id]
         )
 
-        // Devolver stock de cada producto
         for (const item of cartItems.rows) {
             await client.query(
                 "UPDATE products SET stock = stock + $1 WHERE id = $2",
@@ -163,13 +209,10 @@ export const clearCart = async (req, res) => {
             )
         }
 
-        // Eliminar reservas
         await client.query(
             "DELETE FROM stock_reservations WHERE user_id = $1",
             [req.user.id]
         )
-
-        // Vaciar carrito
         await client.query(
             "DELETE FROM cart_items WHERE user_id = $1",
             [req.user.id]
