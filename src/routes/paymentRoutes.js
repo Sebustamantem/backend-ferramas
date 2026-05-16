@@ -1,5 +1,5 @@
 import { Router } from "express"
-import { createPreference, webhook } from "../controllers/PaymentController.js"
+import { createPreference, webhook } from "../controllers/paymentController.js"
 import { verifyToken } from "../middleware/authMiddleware.js"
 
 const router = Router()
