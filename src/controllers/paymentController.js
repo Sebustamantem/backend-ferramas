@@ -1,15 +1,18 @@
-import { MercadoPagoConfig, Preference } from "mercadopago"
+import { WebpayPlus, Options, IntegrationApiKeys, IntegrationCommerceCodes, Environment } from "transbank-sdk"
 import pool from "../config/db.js"
 import "dotenv/config"
 
-const client = new MercadoPagoConfig({
-    accessToken: process.env.MP_ACCESS_TOKEN,
-})
+const tx = new WebpayPlus.Transaction(
+    new Options(
+        IntegrationCommerceCodes.WEBPAY_PLUS,
+        IntegrationApiKeys.WEBPAY,
+        Environment.Integration
+    )
+)
 
-export const createPreference = async (req, res) => {
+export const createTransaction = async (req, res) => {
     const { address } = req.body
     try {
-        // Obtener carrito del usuario
         const cartItems = await pool.query(
             `SELECT ci.product_id, ci.quantity, p.price, p.name, p.image_url
        FROM cart_items ci
@@ -25,15 +28,17 @@ export const createPreference = async (req, res) => {
             (acc, item) => acc + Number(item.price) * item.quantity, 0
         )
 
+        const shipping = total >= 50000 ? 0 : 4990
+        const finalTotal = total + shipping
+
         // Crear orden en BD
         const orderResult = await pool.query(
             `INSERT INTO orders (user_id, total, status, address)
        VALUES ($1, $2, 'pending', $3) RETURNING *`,
-            [req.user.id, total, JSON.stringify(address)]
+            [req.user.id, finalTotal, JSON.stringify(address)]
         )
         const order = orderResult.rows[0]
 
-        // Guardar items de la orden
         for (const item of cartItems.rows) {
             await pool.query(
                 `INSERT INTO order_items (order_id, product_id, quantity, price)
@@ -42,86 +47,96 @@ export const createPreference = async (req, res) => {
             )
         }
 
-        // Crear preferencia en Mercado Pago
-        const preference = new Preference(client)
-        const response = await preference.create({
-            body: {
-                items: cartItems.rows.map((item) => ({
-                    id: String(item.product_id),
-                    title: item.name,
-                    quantity: item.quantity,
-                    unit_price: Number(item.price),
-                    currency_id: "CLP",
-                    picture_url: item.image_url || "",
-                })),
-                back_urls: {
-                    success: `${process.env.FRONTEND_URL}/checkout/success?order_id=${order.id}`,
-                    failure: `${process.env.FRONTEND_URL}/checkout/failure?order_id=${order.id}`,
-                    pending: `${process.env.FRONTEND_URL}/checkout/pending?order_id=${order.id}`,
-                },
-                auto_return: "approved",
-                external_reference: String(order.id),
-                notification_url: `${process.env.BACKEND_URL}/api/payment/webhook`,
-            },
-        })
+        const buyOrder = `ORDER-${order.id}-${Date.now()}`
+        const sessionId = `SESSION-${req.user.id}-${Date.now()}`
+        const returnUrl = `${process.env.BACKEND_URL}/api/payment/confirm`
+
+        const response = await tx.create(buyOrder, sessionId, finalTotal, returnUrl)
+
+        // Guardar token de transbank en la orden
+        await pool.query(
+            "UPDATE orders SET transbank_token = $1 WHERE id = $2",
+            [response.token, order.id]
+        )
 
         res.json({
-            init_point: response.init_point,
-            sandbox_init_point: response.sandbox_init_point,
-            order_id: order.id,
-            preference_id: response.id,
+            url: response.url,
+            token: response.token,
+            order_id: order.id
         })
     } catch (err) {
-        console.error(err)
-        res.status(500).json({ message: "Error al crear preferencia", error: err.message })
+        console.error("Transbank error:", err)
+        res.status(500).json({ message: "Error al crear transacción", error: err.message })
     }
 }
 
-export const webhook = async (req, res) => {
-    const { type, data } = req.body
+export const confirmTransaction = async (req, res) => {
+    const { token_ws } = req.query
+
+    if (!token_ws) {
+        return res.redirect(`${process.env.FRONTEND_URL}/checkout/failure`)
+    }
+
     try {
-        if (type === "payment") {
-            const { MercadoPagoConfig: MPConfig, Payment } = await import("mercadopago")
-            const mpClient = new MPConfig({ accessToken: process.env.MP_ACCESS_TOKEN })
-            const payment = new Payment(mpClient)
-            const paymentData = await payment.get({ id: data.id })
+        const response = await tx.commit(token_ws)
+        console.log("Transbank response:", response)
 
-            const orderId = paymentData.external_reference
-            const status = paymentData.status
+        const order = await pool.query(
+            "SELECT * FROM orders WHERE transbank_token = $1",
+            [token_ws]
+        )
 
-            if (status === "approved") {
+        if (order.rows.length === 0)
+            return res.redirect(`${process.env.FRONTEND_URL}/checkout/failure`)
+
+        const orderId = order.rows[0].id
+
+        if (response.status === "AUTHORIZED") {
+            await pool.query(
+                "UPDATE orders SET status = 'paid' WHERE id = $1",
+                [orderId]
+            )
+
+            // Vaciar carrito
+            const userId = order.rows[0].user_id
+            await pool.query("DELETE FROM cart_items WHERE user_id = $1", [userId])
+            await pool.query("DELETE FROM stock_reservations WHERE user_id = $1", [userId])
+
+            // Descontar stock definitivamente
+            const items = await pool.query(
+                "SELECT product_id, quantity FROM order_items WHERE order_id = $1",
+                [orderId]
+            )
+            for (const item of items.rows) {
                 await pool.query(
-                    "UPDATE orders SET status = 'paid', transbank_token = $1 WHERE id = $2",
-                    [String(data.id), orderId]
+                    "UPDATE products SET stock = stock - $1 WHERE id = $2",
+                    [item.quantity, item.product_id]
                 )
-
-                // Vaciar carrito
-                const order = await pool.query("SELECT user_id FROM orders WHERE id = $1", [orderId])
-                if (order.rows.length > 0) {
-                    await pool.query("DELETE FROM cart_items WHERE user_id = $1", [order.rows[0].user_id])
-                    await pool.query("DELETE FROM stock_reservations WHERE user_id = $1", [order.rows[0].user_id])
-                }
-            } else if (status === "rejected" || status === "cancelled") {
-                await pool.query(
-                    "UPDATE orders SET status = 'cancelled' WHERE id = $1",
-                    [orderId]
-                )
-                // Devolver stock
-                const items = await pool.query(
-                    "SELECT product_id, quantity FROM order_items WHERE order_id = $1",
-                    [orderId]
-                )
-                for (const item of items.rows) {
-                    await pool.query(
-                        "UPDATE products SET stock = stock + $1 WHERE id = $2",
-                        [item.quantity, item.product_id]
-                    )
-                }
             }
+
+            return res.redirect(`${process.env.FRONTEND_URL}/checkout/success?order_id=${orderId}`)
+        } else {
+            await pool.query(
+                "UPDATE orders SET status = 'cancelled' WHERE id = $1",
+                [orderId]
+            )
+
+            // Devolver stock
+            const items = await pool.query(
+                "SELECT product_id, quantity FROM order_items WHERE order_id = $1",
+                [orderId]
+            )
+            for (const item of items.rows) {
+                await pool.query(
+                    "UPDATE products SET stock = stock + $1 WHERE id = $2",
+                    [item.quantity, item.product_id]
+                )
+            }
+
+            return res.redirect(`${process.env.FRONTEND_URL}/checkout/failure`)
         }
-        res.sendStatus(200)
     } catch (err) {
-        console.error("Webhook error:", err)
-        res.sendStatus(500)
+        console.error("Confirm error:", err)
+        return res.redirect(`${process.env.FRONTEND_URL}/checkout/failure`)
     }
 }
