@@ -20,7 +20,6 @@ export const register = async (req, res) => {
         )
         const user = result.rows[0]
         const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" })
-
         res.status(201).json({ user, token })
     } catch (err) {
         res.status(500).json({ message: "Error en el servidor", error: err.message })
@@ -40,9 +39,11 @@ export const login = async (req, res) => {
             return res.status(400).json({ message: "Credenciales inválidas" })
 
         const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" })
-
         res.json({
-            user: { id: user.id, name: user.name, lastname: user.lastname, email: user.email, role: user.role, phone: user.phone, rut: user.rut },
+            user: {
+                id: user.id, name: user.name, lastname: user.lastname,
+                email: user.email, role: user.role, phone: user.phone, rut: user.rut
+            },
             token
         })
     } catch (err) {
