@@ -67,6 +67,8 @@ export const createTransaction = async (req, res) => {
 
         console.log("BACKEND_URL:", backendUrl)
         console.log("RETURN_URL:", returnUrl)
+        console.log("BUY_ORDER:", buyOrder)
+        console.log("SESSION_ID:", sessionId)
         console.log("FINAL_TOTAL:", finalTotal)
 
         const response = await tx.create(
@@ -90,18 +92,21 @@ export const createTransaction = async (req, res) => {
         })
 
     } catch (err) {
-        console.error("Transbank error:", err)
+        console.error("Transbank error completo:", err)
+        console.error("Error message:", err.message)
+        console.error("Error response data:", err.response?.data)
+        console.error("Error status:", err.response?.status)
 
         return res.status(500).json({
             message: "Error al crear transacción",
             error: err.message,
+            detail: err.response?.data || null,
         })
     }
 }
 
 export const confirmTransaction = async (req, res) => {
     const { token_ws } = req.query
-
     const frontendUrl = process.env.FRONTEND_URL
 
     if (!frontendUrl) {
@@ -184,7 +189,10 @@ export const confirmTransaction = async (req, res) => {
         return res.redirect(`${frontendUrl.replace(/\/$/, "")}/checkout/failure`)
 
     } catch (err) {
-        console.error("Confirm error:", err)
+        console.error("Confirm error completo:", err)
+        console.error("Error message:", err.message)
+        console.error("Error response data:", err.response?.data)
+        console.error("Error status:", err.response?.status)
 
         return res.redirect(`${frontendUrl.replace(/\/$/, "")}/checkout/failure`)
     }
