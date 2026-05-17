@@ -6,5 +6,6 @@ const router = Router()
 
 router.post("/create", verifyToken, createTransaction)
 router.get("/confirm", confirmTransaction)
+router.post("/confirm", confirmTransaction)
 
 export default router
