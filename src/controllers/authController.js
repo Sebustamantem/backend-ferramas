@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken"
 import pool from "../config/db.js"
 
 export const register = async (req, res) => {
-    const { name, lastname, email, password, rut, phone } = req.body
+    const { name, lastname, email, password, rut, phone, user_type, business_name, profession } = req.body
     try {
         const exists = await pool.query("SELECT id FROM users WHERE email = $1", [email])
         if (exists.rows.length > 0)
@@ -14,10 +14,15 @@ export const register = async (req, res) => {
             return res.status(400).json({ message: "El RUT ya está registrado" })
 
         const hashed = await bcrypt.hash(password, 10)
+        const type = user_type || "cliente"
+
         const result = await pool.query(
-            "INSERT INTO users (name, lastname, email, password, rut, phone, role) VALUES ($1, $2, $3, $4, $5, $6, 'cliente') RETURNING id, name, lastname, email, role",
-            [name, lastname, email, hashed, rut, phone]
+            `INSERT INTO users (name, lastname, email, password, rut, phone, role, user_type, business_name, profession)
+       VALUES ($1, $2, $3, $4, $5, $6, 'cliente', $7, $8, $9)
+       RETURNING id, name, lastname, email, role, user_type, business_name, profession`,
+            [name, lastname, email, hashed, rut, phone, type, business_name || null, profession || null]
         )
+
         const user = result.rows[0]
         const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" })
         res.status(201).json({ user, token })
@@ -42,7 +47,10 @@ export const login = async (req, res) => {
         res.json({
             user: {
                 id: user.id, name: user.name, lastname: user.lastname,
-                email: user.email, role: user.role, phone: user.phone, rut: user.rut
+                email: user.email, role: user.role, phone: user.phone,
+                rut: user.rut, user_type: user.user_type,
+                business_name: user.business_name, profession: user.profession,
+                first_purchase_used: user.first_purchase_used
             },
             token
         })
