@@ -19,7 +19,7 @@ export const register = async (req, res) => {
         const result = await pool.query(
             `INSERT INTO users (name, lastname, email, password, rut, phone, role, user_type, business_name, profession)
        VALUES ($1, $2, $3, $4, $5, $6, 'cliente', $7, $8, $9)
-       RETURNING id, name, lastname, email, role, user_type, business_name, profession`,
+       RETURNING id, name, lastname, email, phone, rut, role, user_type, business_name, profession, address`,
             [name, lastname, email, hashed, rut, phone, type, business_name || null, profession || null]
         )
 
@@ -50,7 +50,8 @@ export const login = async (req, res) => {
                 email: user.email, role: user.role, phone: user.phone,
                 rut: user.rut, user_type: user.user_type,
                 business_name: user.business_name, profession: user.profession,
-                first_purchase_used: user.first_purchase_used
+                first_purchase_used: user.first_purchase_used,
+                address: user.address || null
             },
             token
         })

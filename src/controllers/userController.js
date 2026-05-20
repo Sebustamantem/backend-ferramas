@@ -16,7 +16,7 @@ export const getUserById = async (req, res) => {
     const { id } = req.params
     try {
         const result = await pool.query(
-            "SELECT id, name, lastname, email, rut, phone, role, created_at FROM users WHERE id = $1",
+            "SELECT id, name, lastname, email, rut, phone, role, address, created_at FROM users WHERE id = $1",
             [id]
         )
         if (result.rows.length === 0)
@@ -74,7 +74,7 @@ export const deleteUser = async (req, res) => {
 export const getMyProfile = async (req, res) => {
     try {
         const result = await pool.query(
-            "SELECT id, name, lastname, email, rut, phone, role, created_at FROM users WHERE id = $1",
+            "SELECT id, name, lastname, email, rut, phone, role, address, created_at FROM users WHERE id = $1",
             [req.user.id]
         )
         if (result.rows.length === 0)
@@ -86,16 +86,17 @@ export const getMyProfile = async (req, res) => {
 }
 
 export const updateMyProfile = async (req, res) => {
-    const { name, lastname, email, phone, password } = req.body
+    const { name, lastname, email, phone, password, address } = req.body
     try {
         let query, params
+        const addressValue = address ? JSON.stringify(address) : null
         if (password) {
             const hashed = await bcrypt.hash(password, 10)
-            query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4, password=$5 WHERE id=$6 RETURNING id, name, lastname, email, phone, role"
-            params = [name, lastname, email, phone, hashed, req.user.id]
+            query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4, password=$5, address=$6 WHERE id=$7 RETURNING id, name, lastname, email, phone, role, address, user_type, rut, business_name, profession, first_purchase_used"
+            params = [name, lastname, email, phone, hashed, addressValue, req.user.id]
         } else {
-            query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4 WHERE id=$5 RETURNING id, name, lastname, email, phone, role"
-            params = [name, lastname, email, phone, req.user.id]
+            query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4, address=$5 WHERE id=$6 RETURNING id, name, lastname, email, phone, role, address, user_type, rut, business_name, profession, first_purchase_used"
+            params = [name, lastname, email, phone, addressValue, req.user.id]
         }
         const result = await pool.query(query, params)
         res.json(result.rows[0])
