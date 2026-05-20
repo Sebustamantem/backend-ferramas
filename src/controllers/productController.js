@@ -38,8 +38,16 @@ export const createProduct = async (req, res) => {
 export const updateProduct = async (req, res) => {
     const { id } = req.params
     const { name, description, price, stock, category } = req.body
-    const image_url = req.file ? req.file.path : req.body.image_url
     try {
+        let image_url
+        if (req.file) {
+            image_url = req.file.path
+        } else {
+            const current = await pool.query("SELECT image_url FROM products WHERE id = $1", [id])
+            if (current.rows.length === 0)
+                return res.status(404).json({ message: "Producto no encontrado" })
+            image_url = current.rows[0].image_url
+        }
         const result = await pool.query(
             "UPDATE products SET name=$1, description=$2, price=$3, stock=$4, image_url=$5, category=$6 WHERE id=$7 RETURNING *",
             [name, description, price, stock, image_url, category, id]
