@@ -1,6 +1,5 @@
 import pool from "../config/db.js"
 
-// Admin: crear/actualizar crédito de un usuario
 export const setCredit = async (req, res) => {
     const { userId } = req.params
     const { credit_limit, is_active } = req.body
@@ -29,7 +28,6 @@ export const setCredit = async (req, res) => {
     }
 }
 
-// Ver crédito propio
 export const getMyCredit = async (req, res) => {
     try {
         const result = await pool.query(
@@ -44,7 +42,6 @@ export const getMyCredit = async (req, res) => {
     }
 }
 
-// Admin: ver todos los créditos
 export const getAllCredits = async (req, res) => {
     try {
         const result = await pool.query(
@@ -59,25 +56,37 @@ export const getAllCredits = async (req, res) => {
     }
 }
 
-// Pagar con FerreCredito
+export const getAllInstallments = async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT fci.*, u.name as user_name, u.email as user_email
+       FROM ferre_credit_installments fci
+       JOIN users u ON fci.user_id = u.id
+       ORDER BY fci.created_at DESC`
+        )
+        res.json(result.rows)
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener cuotas", error: err.message })
+    }
+}
+
 export const payWithCredit = async (req, res) => {
     const { installments, address } = req.body
     const client = await pool.connect()
     try {
         await client.query("BEGIN")
 
-        // Verificar que es maestro o pyme
         const userResult = await client.query(
             "SELECT * FROM users WHERE id = $1",
             [req.user.id]
         )
         const user = userResult.rows[0]
+
         if (!["maestro", "pyme"].includes(user.user_type)) {
             await client.query("ROLLBACK")
             return res.status(403).json({ message: "Solo maestros y PYMEs pueden usar FerreCredito" })
         }
 
-        // Verificar crédito disponible
         const creditResult = await client.query(
             "SELECT * FROM ferre_credits WHERE user_id = $1",
             [req.user.id]
@@ -90,14 +99,19 @@ export const payWithCredit = async (req, res) => {
         const credit = creditResult.rows[0]
         const available = Number(credit.credit_limit) - Number(credit.balance_used)
 
-        // Verificar cuotas pendientes al día
         const pendingInstallments = await client.query(
             `SELECT * FROM ferre_credit_installments
        WHERE user_id = $1 AND status = 'active' AND paid_installments < installments`,
             [req.user.id]
         )
 
-        // Obtener carrito
+        if (pendingInstallments.rows.length > 0) {
+            await client.query("ROLLBACK")
+            return res.status(400).json({
+                message: "Debes estar al día en tus cuotas para realizar una nueva compra"
+            })
+        }
+
         const cartItems = await client.query(
             `SELECT ci.product_id, ci.quantity, p.price, p.name
        FROM cart_items ci
@@ -115,7 +129,6 @@ export const payWithCredit = async (req, res) => {
             (acc, item) => acc + Number(item.price) * item.quantity, 0
         )
 
-        // Aplicar descuento primera compra (30%)
         let discountApplied = false
         if (!user.first_purchase_used) {
             total = total * 0.7
@@ -125,14 +138,6 @@ export const payWithCredit = async (req, res) => {
         const shipping = total >= 50000 ? 0 : 4990
         const finalTotal = Math.round(total + shipping)
 
-        // Verificar crédito disponible
-        if (pendingInstallments.rows.length > 0) {
-            await client.query("ROLLBACK")
-            return res.status(400).json({
-                message: "Debes estar al día en tus cuotas para realizar una nueva compra"
-            })
-        }
-
         if (available < finalTotal) {
             await client.query("ROLLBACK")
             return res.status(400).json({
@@ -140,7 +145,6 @@ export const payWithCredit = async (req, res) => {
             })
         }
 
-        // Crear orden
         const orderResult = await client.query(
             `INSERT INTO orders (user_id, total, status, address)
        VALUES ($1, $2, 'paid', $3) RETURNING *`,
@@ -154,14 +158,12 @@ export const payWithCredit = async (req, res) => {
          VALUES ($1, $2, $3, $4)`,
                 [order.id, item.product_id, item.quantity, item.price]
             )
-            // Descontar stock
             await client.query(
                 "UPDATE products SET stock = stock - $1 WHERE id = $2",
                 [item.quantity, item.product_id]
             )
         }
 
-        // Crear cuotas
         const amountPerInstallment = Math.round(finalTotal / installments)
         await client.query(
             `INSERT INTO ferre_credit_installments
@@ -170,14 +172,12 @@ export const payWithCredit = async (req, res) => {
             [req.user.id, order.id, finalTotal, installments, amountPerInstallment]
         )
 
-        // Actualizar saldo usado
         await client.query(
             `UPDATE ferre_credits SET balance_used = balance_used + $1, updated_at = NOW()
        WHERE user_id = $2`,
             [finalTotal, req.user.id]
         )
 
-        // Marcar primera compra usada
         if (discountApplied) {
             await client.query(
                 "UPDATE users SET first_purchase_used = TRUE WHERE id = $1",
@@ -185,7 +185,6 @@ export const payWithCredit = async (req, res) => {
             )
         }
 
-        // Vaciar carrito
         await client.query("DELETE FROM cart_items WHERE user_id = $1", [req.user.id])
         await client.query("DELETE FROM stock_reservations WHERE user_id = $1", [req.user.id])
 
@@ -207,7 +206,6 @@ export const payWithCredit = async (req, res) => {
     }
 }
 
-// Ver mis cuotas
 export const getMyInstallments = async (req, res) => {
     try {
         const result = await pool.query(
@@ -224,7 +222,6 @@ export const getMyInstallments = async (req, res) => {
     }
 }
 
-// Admin: registrar pago de cuota
 export const payInstallment = async (req, res) => {
     const { installmentId } = req.params
     const client = await pool.connect()
@@ -246,14 +243,12 @@ export const payInstallment = async (req, res) => {
             return res.status(400).json({ message: "Todas las cuotas ya están pagadas" })
         }
 
-        // Registrar pago
         await client.query(
             `INSERT INTO ferre_credit_payments (installment_id, user_id, amount)
        VALUES ($1, $2, $3)`,
             [installmentId, inst.user_id, inst.amount_per_installment]
         )
 
-        // Actualizar cuotas pagadas
         const newPaid = inst.paid_installments + 1
         const newStatus = newPaid >= inst.installments ? "completed" : "active"
         await client.query(
@@ -263,7 +258,6 @@ export const payInstallment = async (req, res) => {
             [newPaid, newStatus, installmentId]
         )
 
-        // Reducir saldo usado
         await client.query(
             `UPDATE ferre_credits SET balance_used = balance_used - $1, updated_at = NOW()
        WHERE user_id = $2`,
