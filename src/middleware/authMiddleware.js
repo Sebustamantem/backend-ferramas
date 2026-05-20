@@ -20,3 +20,21 @@ export const verifyAdmin = (req, res, next) => {
         return res.status(403).json({ message: "Acceso denegado, se requiere rol admin" })
     next()
 }
+
+export const verifyVendedor = (req, res, next) => {
+    if (!["admin", "vendedor"].includes(req.user.role))
+        return res.status(403).json({ message: "Acceso denegado, se requiere rol vendedor" })
+    next()
+}
+
+export const verifyBodeguero = (req, res, next) => {
+    if (!["admin", "bodeguero"].includes(req.user.role))
+        return res.status(403).json({ message: "Acceso denegado, se requiere rol bodeguero" })
+    next()
+}
+
+export const verifyStaff = (req, res, next) => {
+    if (!["admin", "vendedor", "bodeguero"].includes(req.user.role))
+        return res.status(403).json({ message: "Acceso denegado" })
+    next()
+}
