@@ -74,7 +74,7 @@ export const deleteUser = async (req, res) => {
 export const getMyProfile = async (req, res) => {
     try {
         const result = await pool.query(
-            "SELECT id, name, lastname, email, rut, phone, role, address, created_at FROM users WHERE id = $1",
+            "SELECT id, name, lastname, email, rut, phone, role, user_type, business_name, profession, address, created_at FROM users WHERE id = $1",
             [req.user.id]
         )
         if (result.rows.length === 0)
@@ -86,17 +86,31 @@ export const getMyProfile = async (req, res) => {
 }
 
 export const updateMyProfile = async (req, res) => {
-    const { name, lastname, email, phone, password, address } = req.body
+    const { name, lastname, email, phone, password, address, user_type, business_name, profession } = req.body
+    const allowedTypes = ["cliente", "maestro", "pyme"]
+    if (user_type && !allowedTypes.includes(user_type)) {
+        return res.status(400).json({ message: "Tipo de usuario inválido" })
+    }
+
     try {
+        const currentResult = await pool.query(
+            "SELECT user_type, business_name, profession, address FROM users WHERE id = $1",
+            [req.user.id]
+        )
+        const current = currentResult.rows[0]
+        const newType = user_type || current.user_type
+        const newBusiness = business_name !== undefined ? business_name : current.business_name
+        const newProfession = profession !== undefined ? profession : current.profession
+        const addressValue = address !== undefined ? JSON.stringify(address) : current.address
+
         let query, params
-        const addressValue = address ? JSON.stringify(address) : null
         if (password) {
             const hashed = await bcrypt.hash(password, 10)
-            query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4, password=$5, address=$6 WHERE id=$7 RETURNING id, name, lastname, email, phone, role, address, user_type, rut, business_name, profession, first_purchase_used"
-            params = [name, lastname, email, phone, hashed, addressValue, req.user.id]
+            query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4, password=$5, address=$6, user_type=$7, business_name=$8, profession=$9 WHERE id=$10 RETURNING id, name, lastname, email, phone, role, address, user_type, rut, business_name, profession, first_purchase_used"
+            params = [name, lastname, email, phone, hashed, addressValue, newType, newBusiness, newProfession, req.user.id]
         } else {
-            query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4, address=$5 WHERE id=$6 RETURNING id, name, lastname, email, phone, role, address, user_type, rut, business_name, profession, first_purchase_used"
-            params = [name, lastname, email, phone, addressValue, req.user.id]
+            query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4, address=$5, user_type=$6, business_name=$7, profession=$8 WHERE id=$9 RETURNING id, name, lastname, email, phone, role, address, user_type, rut, business_name, profession, first_purchase_used"
+            params = [name, lastname, email, phone, addressValue, newType, newBusiness, newProfession, req.user.id]
         }
         const result = await pool.query(query, params)
         res.json(result.rows[0])
