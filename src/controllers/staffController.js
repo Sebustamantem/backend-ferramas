@@ -103,7 +103,7 @@ export const getOrdersForWarehouse = async (req, res) => {
        JOIN users u ON o.user_id = u.id
        JOIN order_items oi ON o.id = oi.order_id
        JOIN products p ON oi.product_id = p.id
-       WHERE o.status IN ('paid', 'processing', 'shipped')
+       WHERE o.status IN ('paid', 'processing', 'shipped', 'delivered')
        GROUP BY o.id, u.name, u.email
        ORDER BY o.created_at DESC`
         )
@@ -125,5 +125,33 @@ export const dispatchOrder = async (req, res) => {
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al despachar pedido", error: err.message })
+    }
+}
+
+export const updateWarehouseOrderStatus = async (req, res) => {
+    const { id } = req.params
+    const { status } = req.body
+    const validStatuses = ["processing", "shipped", "delivered"]
+    if (!validStatuses.includes(status))
+        return res.status(400).json({ message: "Estado invalido para bodega" })
+
+    try {
+        const result = await pool.query(
+            `UPDATE orders
+             SET status=$1
+             WHERE id=$2
+               AND (
+                (status='paid' AND $1='processing')
+                OR (status='processing' AND $1='shipped')
+                OR (status='shipped' AND $1='delivered')
+               )
+             RETURNING *`,
+            [status, id]
+        )
+        if (result.rows.length === 0)
+            return res.status(400).json({ message: "No se puede aplicar ese cambio de estado" })
+        res.json(result.rows[0])
+    } catch (err) {
+        res.status(500).json({ message: "Error al actualizar estado del pedido", error: err.message })
     }
 }

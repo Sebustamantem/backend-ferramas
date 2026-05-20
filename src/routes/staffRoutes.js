@@ -1,7 +1,7 @@
 import { Router } from "express"
 import {
     getOrders, updateOrderStatus, getClients,
-    getInventory, updateStock, getOrdersForWarehouse, dispatchOrder
+    getInventory, updateStock, getOrdersForWarehouse, dispatchOrder, updateWarehouseOrderStatus
 } from "../controllers/staffController.js"
 import { verifyToken, verifyVendedor, verifyBodeguero } from "../middleware/authMiddleware.js"
 
@@ -16,6 +16,7 @@ router.get("/clients", verifyToken, verifyVendedor, getClients)
 router.get("/inventory", verifyToken, verifyBodeguero, getInventory)
 router.put("/inventory/:id/stock", verifyToken, verifyBodeguero, updateStock)
 router.get("/warehouse/orders", verifyToken, verifyBodeguero, getOrdersForWarehouse)
+router.put("/warehouse/orders/:id/status", verifyToken, verifyBodeguero, updateWarehouseOrderStatus)
 router.put("/warehouse/orders/:id/dispatch", verifyToken, verifyBodeguero, dispatchOrder)
 
 export default router
