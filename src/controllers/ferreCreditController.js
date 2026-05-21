@@ -3,23 +3,30 @@ import pool from "../config/db.js"
 export const setCredit = async (req, res) => {
     const { userId } = req.params
     const { credit_limit, is_active } = req.body
+    const limit = Number(credit_limit)
+    if (!Number.isFinite(limit) || limit < 0) {
+        return res.status(400).json({ message: "Limite de credito invalido" })
+    }
     try {
         const exists = await pool.query(
-            "SELECT id FROM ferre_credits WHERE user_id = $1",
+            "SELECT id, balance_used FROM ferre_credits WHERE user_id = $1",
             [userId]
         )
+        if (exists.rows.length > 0 && limit < Number(exists.rows[0].balance_used)) {
+            return res.status(400).json({ message: "El limite no puede ser menor al saldo usado" })
+        }
         let result
         if (exists.rows.length > 0) {
             result = await pool.query(
                 `UPDATE ferre_credits SET credit_limit=$1, is_active=$2, updated_at=NOW()
          WHERE user_id=$3 RETURNING *`,
-                [credit_limit, is_active, userId]
+                [limit, is_active, userId]
             )
         } else {
             result = await pool.query(
                 `INSERT INTO ferre_credits (user_id, credit_limit, is_active)
          VALUES ($1, $2, $3) RETURNING *`,
-                [userId, credit_limit, is_active]
+                [userId, limit, is_active]
             )
         }
         res.json(result.rows[0])
@@ -243,10 +250,13 @@ export const payInstallment = async (req, res) => {
             return res.status(400).json({ message: "Todas las cuotas ya están pagadas" })
         }
 
+        const remainingAmount = Number(inst.total_amount) - (Number(inst.amount_per_installment) * Number(inst.paid_installments))
+        const paymentAmount = Math.min(Number(inst.amount_per_installment), remainingAmount)
+
         await client.query(
             `INSERT INTO ferre_credit_payments (installment_id, user_id, amount)
        VALUES ($1, $2, $3)`,
-            [installmentId, inst.user_id, inst.amount_per_installment]
+            [installmentId, inst.user_id, paymentAmount]
         )
 
         const newPaid = inst.paid_installments + 1
@@ -259,9 +269,9 @@ export const payInstallment = async (req, res) => {
         )
 
         await client.query(
-            `UPDATE ferre_credits SET balance_used = balance_used - $1, updated_at = NOW()
+            `UPDATE ferre_credits SET balance_used = GREATEST(balance_used - $1, 0), updated_at = NOW()
        WHERE user_id = $2`,
-            [inst.amount_per_installment, inst.user_id]
+            [paymentAmount, inst.user_id]
         )
 
         await client.query("COMMIT")
