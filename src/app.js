@@ -7,6 +7,9 @@ import userRoutes from "./routes/userRoutes.js"
 import orderRoutes from "./routes/orderRoutes.js"
 import paymentRoutes from "./routes/paymentRoutes.js"
 import ferreCreditRoutes from "./routes/ferreCreditRoutes.js"
+import pointsRoutes from "./routes/pointsRoutes.js"
+import serviceRoutes from "./routes/serviceRoutes.js"
+import surveyRoutes from "./routes/surveyRoutes.js"
 import staffRoutes from "./routes/staffRoutes.js"
 
 const app = express()
@@ -25,6 +28,9 @@ app.use("/api/users", userRoutes)
 app.use("/api/orders", orderRoutes)
 app.use("/api/payment", paymentRoutes)
 app.use("/api/ferre-credit", ferreCreditRoutes)
+app.use("/api/points", pointsRoutes)
+app.use("/api/services", serviceRoutes)
+app.use("/api/surveys", surveyRoutes)
 app.use("/api/staff", staffRoutes)
 
 export default app

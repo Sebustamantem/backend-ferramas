@@ -2,6 +2,8 @@ import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
 import pool from "../config/db.js"
 
+const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
+
 export const register = async (req, res) => {
     const { name, lastname, email, password, rut, phone, user_type, business_name, profession } = req.body
     try {
@@ -14,7 +16,9 @@ export const register = async (req, res) => {
             return res.status(400).json({ message: "El RUT ya está registrado" })
 
         const hashed = await bcrypt.hash(password, 10)
-        const type = user_type || "cliente"
+        const allowedTypes = ["cliente", "maestro", "pyme"]
+        const requestedType = allowedTypes.includes(user_type) ? user_type : "cliente"
+        const type = ["maestro", "pyme"].includes(requestedType) ? `${requestedType}_pending` : requestedType
 
         const result = await pool.query(
             `INSERT INTO users (name, lastname, email, password, rut, phone, role, user_type, business_name, profession)
@@ -33,8 +37,16 @@ export const register = async (req, res) => {
 
 export const login = async (req, res) => {
     const { email, password } = req.body
+    const identifier = String(email || "").trim()
     try {
-        const result = await pool.query("SELECT * FROM users WHERE email = $1", [email])
+        const result = await pool.query(
+            `SELECT *
+             FROM users
+             WHERE LOWER(email) = LOWER($1)
+                OR LOWER(name) = LOWER($1)
+             LIMIT 1`,
+            [identifier]
+        )
         if (result.rows.length === 0)
             return res.status(400).json({ message: "Credenciales inválidas" })
 
@@ -43,6 +55,7 @@ export const login = async (req, res) => {
         if (!valid)
             return res.status(400).json({ message: "Credenciales inválidas" })
 
+        const mustChangePassword = user.role === "admin" && normalizeRut(password) === normalizeRut(user.rut)
         const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" })
         res.json({
             user: {
@@ -51,7 +64,8 @@ export const login = async (req, res) => {
                 rut: user.rut, user_type: user.user_type,
                 business_name: user.business_name, profession: user.profession,
                 first_purchase_used: user.first_purchase_used,
-                address: user.address || null
+                address: user.address || null,
+                must_change_password: mustChangePassword
             },
             token
         })

@@ -1,7 +1,7 @@
 import { Router } from "express"
 import {
     setCredit, getMyCredit, getAllCredits,
-    payWithCredit, getMyInstallments, payInstallment, getAllInstallments
+    payWithCredit, getMyInstallments, payInstallment, getAllInstallments, rejectCreditApplication
 } from "../controllers/ferreCreditController.js"
 import { verifyToken, verifyAdmin } from "../middleware/authMiddleware.js"
 
@@ -13,6 +13,7 @@ router.post("/pay", verifyToken, payWithCredit)
 router.get("/all", verifyToken, verifyAdmin, getAllCredits)
 router.get("/all-installments", verifyToken, verifyAdmin, getAllInstallments)
 router.post("/user/:userId", verifyToken, verifyAdmin, setCredit)
+router.post("/user/:userId/reject", verifyToken, verifyAdmin, rejectCreditApplication)
 router.post("/installments/:installmentId/pay", verifyToken, verifyAdmin, payInstallment)
 
 export default router

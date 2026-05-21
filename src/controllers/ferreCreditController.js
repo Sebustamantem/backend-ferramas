@@ -1,5 +1,6 @@
 import pool from "../config/db.js"
 import { releaseExpiredReservations } from "./cartController.js"
+import { addPointsForOrder, ensurePointsTables, usePointsForOrder } from "./pointsController.js"
 
 export const setCredit = async (req, res) => {
     const { userId } = req.params
@@ -8,31 +9,91 @@ export const setCredit = async (req, res) => {
     if (!Number.isFinite(limit) || limit < 0) {
         return res.status(400).json({ message: "Limite de credito invalido" })
     }
+    const client = await pool.connect()
     try {
-        const exists = await pool.query(
+        await client.query("BEGIN")
+        const user = await client.query(
+            "SELECT id, user_type FROM users WHERE id = $1",
+            [userId]
+        )
+        if (user.rows.length === 0) {
+            await client.query("ROLLBACK")
+            return res.status(404).json({ message: "Usuario no encontrado" })
+        }
+        const currentType = user.rows[0].user_type
+        if (!["maestro", "pyme", "maestro_pending", "pyme_pending"].includes(currentType)) {
+            await client.query("ROLLBACK")
+            return res.status(400).json({ message: "El usuario no tiene una postulacion FerreCredito" })
+        }
+        const approvedType = currentType === "maestro_pending" ? "maestro" : currentType === "pyme_pending" ? "pyme" : currentType
+        if (approvedType !== currentType) {
+            await client.query("UPDATE users SET user_type=$1 WHERE id=$2", [approvedType, userId])
+        }
+        const exists = await client.query(
             "SELECT id, balance_used FROM ferre_credits WHERE user_id = $1",
             [userId]
         )
         if (exists.rows.length > 0 && limit < Number(exists.rows[0].balance_used)) {
+            await client.query("ROLLBACK")
             return res.status(400).json({ message: "El limite no puede ser menor al saldo usado" })
         }
         let result
         if (exists.rows.length > 0) {
-            result = await pool.query(
+            result = await client.query(
                 `UPDATE ferre_credits SET credit_limit=$1, is_active=$2, updated_at=NOW()
          WHERE user_id=$3 RETURNING *`,
                 [limit, is_active, userId]
             )
         } else {
-            result = await pool.query(
+            result = await client.query(
                 `INSERT INTO ferre_credits (user_id, credit_limit, is_active)
          VALUES ($1, $2, $3) RETURNING *`,
                 [userId, limit, is_active]
             )
         }
+        await client.query("COMMIT")
+        client.release()
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al configurar crédito", error: err.message })
+    }
+}
+
+export const rejectCreditApplication = async (req, res) => {
+    const { userId } = req.params
+    const client = await pool.connect()
+
+    try {
+        await client.query("BEGIN")
+        const user = await client.query(
+            "SELECT id, user_type FROM users WHERE id=$1",
+            [userId]
+        )
+
+        if (user.rows.length === 0) {
+            await client.query("ROLLBACK")
+            return res.status(404).json({ message: "Usuario no encontrado" })
+        }
+
+        if (!["maestro_pending", "pyme_pending"].includes(user.rows[0].user_type)) {
+            await client.query("ROLLBACK")
+            return res.status(400).json({ message: "El usuario no tiene una postulacion pendiente" })
+        }
+
+        await client.query("UPDATE users SET user_type='cliente' WHERE id=$1", [userId])
+        await client.query(
+            `UPDATE ferre_credits
+             SET is_active=false, updated_at=NOW()
+             WHERE user_id=$1`,
+            [userId]
+        )
+        await client.query("COMMIT")
+        res.json({ message: "Postulacion rechazada" })
+    } catch (err) {
+        await client.query("ROLLBACK")
+        res.status(500).json({ message: "Error al rechazar postulacion", error: err.message })
+    } finally {
+        client.release()
     }
 }
 
@@ -79,10 +140,11 @@ export const getAllInstallments = async (req, res) => {
 }
 
 export const payWithCredit = async (req, res) => {
-    const { installments, address } = req.body
+    const { installments, address, points_to_use = 0 } = req.body
     const client = await pool.connect()
     try {
         await releaseExpiredReservations()
+        await ensurePointsTables()
         await client.query("BEGIN")
 
         const userResult = await client.query(
@@ -145,7 +207,19 @@ export const payWithCredit = async (req, res) => {
         }
 
         const shipping = total >= 50000 ? 0 : 4990
-        const finalTotal = Math.round(total + shipping)
+        const beforePointsTotal = Math.round(total + shipping)
+
+        const orderResult = await client.query(
+            `INSERT INTO orders (user_id, total, status, address)
+       VALUES ($1, $2, 'paid', $3) RETURNING *`,
+            [req.user.id, beforePointsTotal, JSON.stringify(address)]
+        )
+        const order = orderResult.rows[0]
+        const pointsUsed = await usePointsForOrder(client, req.user.id, order.id, points_to_use, beforePointsTotal)
+        const finalTotal = Math.max(beforePointsTotal - pointsUsed, 0)
+        if (pointsUsed > 0) {
+            await client.query("UPDATE orders SET total=$1 WHERE id=$2", [finalTotal, order.id])
+        }
 
         if (available < finalTotal) {
             await client.query("ROLLBACK")
@@ -153,13 +227,6 @@ export const payWithCredit = async (req, res) => {
                 message: `Crédito insuficiente. Disponible: $${available.toLocaleString("es-CL")}`
             })
         }
-
-        const orderResult = await client.query(
-            `INSERT INTO orders (user_id, total, status, address)
-       VALUES ($1, $2, 'paid', $3) RETURNING *`,
-            [req.user.id, finalTotal, JSON.stringify(address)]
-        )
-        const order = orderResult.rows[0]
 
         for (const item of cartItems.rows) {
             await client.query(
@@ -192,6 +259,7 @@ export const payWithCredit = async (req, res) => {
 
         await client.query("DELETE FROM cart_items WHERE user_id = $1", [req.user.id])
         await client.query("DELETE FROM stock_reservations WHERE user_id = $1", [req.user.id])
+        const pointsEarned = await addPointsForOrder(client, req.user.id, order.id, finalTotal)
 
         await client.query("COMMIT")
 
@@ -201,7 +269,9 @@ export const payWithCredit = async (req, res) => {
             total: finalTotal,
             installments,
             amount_per_installment: amountPerInstallment,
-            discount_applied: discountApplied
+            discount_applied: discountApplied,
+            points_used: pointsUsed,
+            points_earned: pointsEarned
         })
     } catch (err) {
         await client.query("ROLLBACK")

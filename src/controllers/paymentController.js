@@ -1,6 +1,7 @@
 import { WebpayPlus, Options, IntegrationApiKeys, IntegrationCommerceCodes, Environment } from "transbank-sdk"
 import pool from "../config/db.js"
 import { releaseExpiredReservations } from "./cartController.js"
+import { addPointsForOrder, ensurePointsTables, usePointsForOrder } from "./pointsController.js"
 import "dotenv/config"
 
 const tx = new WebpayPlus.Transaction(
@@ -12,10 +13,13 @@ const tx = new WebpayPlus.Transaction(
 )
 
 export const createTransaction = async (req, res) => {
-    const { address } = req.body
+    const { address, points_to_use = 0 } = req.body
+    let createdOrderId = null
+    let deductedPoints = 0
 
     try {
         await releaseExpiredReservations()
+        await ensurePointsTables()
         const backendUrl = process.env.BACKEND_URL
 
         if (!backendUrl) {
@@ -44,16 +48,22 @@ export const createTransaction = async (req, res) => {
         )
 
         const shipping = total >= 50000 ? 0 : 4990
-        const finalTotal = Math.round(total + shipping)
+        const beforePointsTotal = Math.round(total + shipping)
 
         const orderResult = await pool.query(
             `INSERT INTO orders (user_id, total, status, address)
              VALUES ($1, $2, 'pending', $3)
              RETURNING *`,
-            [req.user.id, finalTotal, JSON.stringify(address)]
+            [req.user.id, beforePointsTotal, JSON.stringify(address)]
         )
 
         const order = orderResult.rows[0]
+        createdOrderId = order.id
+        deductedPoints = await usePointsForOrder(pool, req.user.id, order.id, points_to_use, beforePointsTotal)
+        const finalTotal = Math.max(beforePointsTotal - deductedPoints, 0)
+        if (deductedPoints > 0) {
+            await pool.query("UPDATE orders SET total=$1 WHERE id=$2", [finalTotal, order.id])
+        }
 
         for (const item of cartItems.rows) {
             await pool.query(
@@ -99,6 +109,21 @@ export const createTransaction = async (req, res) => {
         console.error("Error response data:", err.response?.data)
         console.error("Error status:", err.response?.status)
 
+        if (createdOrderId && deductedPoints > 0) {
+            await pool.query(
+                `INSERT INTO user_points (user_id, balance)
+                 VALUES ($1, $2)
+                 ON CONFLICT (user_id)
+                 DO UPDATE SET balance = user_points.balance + $2, updated_at = NOW()`,
+                [req.user.id, deductedPoints]
+            )
+            await pool.query(
+                `INSERT INTO point_transactions (user_id, order_id, type, points, description)
+                 VALUES ($1, $2, 'refunded', $3, 'Devolucion por error al crear pago')`,
+                [req.user.id, createdOrderId, deductedPoints]
+            )
+        }
+
         return res.status(500).json({
             message: "Error al crear transacción",
             error: err.message,
@@ -108,11 +133,12 @@ export const createTransaction = async (req, res) => {
 }
 
 export const createTransferOrder = async (req, res) => {
-    const { address } = req.body
+    const { address, points_to_use = 0 } = req.body
     const client = await pool.connect()
 
     try {
         await releaseExpiredReservations()
+        await ensurePointsTables()
         await client.query("BEGIN")
 
         const cartItems = await client.query(
@@ -133,15 +159,20 @@ export const createTransferOrder = async (req, res) => {
             0
         )
         const shipping = subtotal >= 50000 ? 0 : 4990
-        const finalTotal = Math.round(subtotal + shipping)
+        const beforePointsTotal = Math.round(subtotal + shipping)
 
         const orderResult = await client.query(
             `INSERT INTO orders (user_id, total, status, address)
              VALUES ($1, $2, 'transfer_pending', $3)
              RETURNING *`,
-            [req.user.id, finalTotal, JSON.stringify(address)]
+            [req.user.id, beforePointsTotal, JSON.stringify(address)]
         )
         const order = orderResult.rows[0]
+        const pointsUsed = await usePointsForOrder(client, req.user.id, order.id, points_to_use, beforePointsTotal)
+        const finalTotal = Math.max(beforePointsTotal - pointsUsed, 0)
+        if (pointsUsed > 0) {
+            await client.query("UPDATE orders SET total=$1 WHERE id=$2", [finalTotal, order.id])
+        }
 
         for (const item of cartItems.rows) {
             await client.query(
@@ -176,7 +207,8 @@ export const createTransferOrder = async (req, res) => {
         return res.status(201).json({
             order_id: order.id,
             status: order.status,
-            total: order.total,
+            total: finalTotal,
+            points_used: pointsUsed,
             message: "Pedido creado. El contador debe confirmar la transferencia.",
         })
     } catch (err) {
@@ -260,6 +292,7 @@ export const confirmTransaction = async (req, res) => {
 
             await pool.query(`DELETE FROM cart_items WHERE user_id = $1`, [order.user_id])
             await pool.query(`DELETE FROM stock_reservations WHERE user_id = $1`, [order.user_id])
+            await addPointsForOrder(pool, order.user_id, orderId, order.total)
 
             return res.redirect(
                 `${frontendUrl.replace(/\/$/, "")}/checkout/success?order_id=${orderId}`
@@ -300,6 +333,28 @@ export const confirmTransaction = async (req, res) => {
              WHERE id = $1`,
             [orderId]
         )
+
+        const usedPoints = await pool.query(
+            `SELECT COALESCE(SUM(points), 0) as points
+             FROM point_transactions
+             WHERE order_id=$1 AND type='used'`,
+            [orderId]
+        )
+        const pointsToRestore = Number(usedPoints.rows[0]?.points || 0)
+        if (pointsToRestore > 0) {
+            await pool.query(
+                `INSERT INTO user_points (user_id, balance)
+                 VALUES ($1, $2)
+                 ON CONFLICT (user_id)
+                 DO UPDATE SET balance = user_points.balance + $2, updated_at = NOW()`,
+                [order.user_id, pointsToRestore]
+            )
+            await pool.query(
+                `INSERT INTO point_transactions (user_id, order_id, type, points, description)
+                 VALUES ($1, $2, 'refunded', $3, 'Devolucion por pago rechazado')`,
+                [order.user_id, orderId, pointsToRestore]
+            )
+        }
 
         return res.redirect(`${frontendUrl.replace(/\/$/, "")}/checkout/failure`)
 
