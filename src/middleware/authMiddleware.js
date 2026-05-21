@@ -33,8 +33,14 @@ export const verifyBodeguero = (req, res, next) => {
     next()
 }
 
+export const verifyContador = (req, res, next) => {
+    if (!["admin", "contador"].includes(req.user.role))
+        return res.status(403).json({ message: "Acceso denegado, se requiere rol contador" })
+    next()
+}
+
 export const verifyStaff = (req, res, next) => {
-    if (!["admin", "vendedor", "bodeguero"].includes(req.user.role))
+    if (!["admin", "vendedor", "bodeguero", "contador"].includes(req.user.role))
         return res.status(403).json({ message: "Acceso denegado" })
     next()
 }

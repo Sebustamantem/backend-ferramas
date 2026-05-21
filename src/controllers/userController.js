@@ -46,7 +46,7 @@ export const updateUser = async (req, res) => {
 export const updateUserRole = async (req, res) => {
     const { id } = req.params
     const { role } = req.body
-    if (!["cliente", "vendedor", "bodeguero"].includes(role))
+    if (!["cliente", "vendedor", "bodeguero", "contador"].includes(role))
         return res.status(400).json({ message: "Rol inválido" })
     try {
         const result = await pool.query(

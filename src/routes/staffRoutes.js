@@ -1,9 +1,10 @@
 import { Router } from "express"
 import {
     getOrders, updateOrderStatus, getClients,
-    getInventory, updateStock, getOrdersForWarehouse, dispatchOrder, updateWarehouseOrderStatus
+    getInventory, updateStock, getOrdersForWarehouse, dispatchOrder, updateWarehouseOrderStatus,
+    getAccountingOrders, confirmTransferOrder, rejectTransferOrder, registerDeliveredOrder
 } from "../controllers/staffController.js"
-import { verifyToken, verifyVendedor, verifyBodeguero } from "../middleware/authMiddleware.js"
+import { verifyToken, verifyVendedor, verifyBodeguero, verifyContador } from "../middleware/authMiddleware.js"
 
 const router = Router()
 
@@ -18,5 +19,11 @@ router.put("/inventory/:id/stock", verifyToken, verifyBodeguero, updateStock)
 router.get("/warehouse/orders", verifyToken, verifyBodeguero, getOrdersForWarehouse)
 router.put("/warehouse/orders/:id/status", verifyToken, verifyBodeguero, updateWarehouseOrderStatus)
 router.put("/warehouse/orders/:id/dispatch", verifyToken, verifyBodeguero, dispatchOrder)
+
+// Contador
+router.get("/accounting/orders", verifyToken, verifyContador, getAccountingOrders)
+router.put("/accounting/orders/:id/confirm-transfer", verifyToken, verifyContador, confirmTransferOrder)
+router.put("/accounting/orders/:id/reject-transfer", verifyToken, verifyContador, rejectTransferOrder)
+router.put("/accounting/orders/:id/delivered", verifyToken, verifyContador, registerDeliveredOrder)
 
 export default router

@@ -107,6 +107,90 @@ export const createTransaction = async (req, res) => {
     }
 }
 
+export const createTransferOrder = async (req, res) => {
+    const { address } = req.body
+    const client = await pool.connect()
+
+    try {
+        await releaseExpiredReservations()
+        await client.query("BEGIN")
+
+        const cartItems = await client.query(
+            `SELECT ci.product_id, ci.quantity, p.price, p.name
+             FROM cart_items ci
+             JOIN products p ON ci.product_id = p.id
+             WHERE ci.user_id = $1`,
+            [req.user.id]
+        )
+
+        if (cartItems.rows.length === 0) {
+            await client.query("ROLLBACK")
+            return res.status(400).json({ message: "El carrito esta vacio" })
+        }
+
+        const subtotal = cartItems.rows.reduce(
+            (acc, item) => acc + Number(item.price) * Number(item.quantity),
+            0
+        )
+        const shipping = subtotal >= 50000 ? 0 : 4990
+        const finalTotal = Math.round(subtotal + shipping)
+
+        const orderResult = await client.query(
+            `INSERT INTO orders (user_id, total, status, address)
+             VALUES ($1, $2, 'transfer_pending', $3)
+             RETURNING *`,
+            [req.user.id, finalTotal, JSON.stringify(address)]
+        )
+        const order = orderResult.rows[0]
+
+        for (const item of cartItems.rows) {
+            await client.query(
+                `INSERT INTO order_items (order_id, product_id, quantity, price)
+                 VALUES ($1, $2, $3, $4)`,
+                [order.id, item.product_id, item.quantity, item.price]
+            )
+
+            const reservation = await client.query(
+                `SELECT quantity
+                 FROM stock_reservations
+                 WHERE user_id = $1 AND product_id = $2`,
+                [req.user.id, item.product_id]
+            )
+            const reservedQuantity = Number(reservation.rows[0]?.quantity || 0)
+            const missingQuantity = Math.max(Number(item.quantity) - reservedQuantity, 0)
+
+            if (missingQuantity > 0) {
+                await client.query(
+                    `UPDATE products
+                     SET stock = stock - $1
+                     WHERE id = $2`,
+                    [missingQuantity, item.product_id]
+                )
+            }
+        }
+
+        await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.user.id])
+        await client.query(`DELETE FROM stock_reservations WHERE user_id = $1`, [req.user.id])
+        await client.query("COMMIT")
+
+        return res.status(201).json({
+            order_id: order.id,
+            status: order.status,
+            total: order.total,
+            message: "Pedido creado. El contador debe confirmar la transferencia.",
+        })
+    } catch (err) {
+        await client.query("ROLLBACK")
+        console.error("Transfer order error:", err)
+        return res.status(500).json({
+            message: "Error al crear pedido por transferencia",
+            error: err.message,
+        })
+    } finally {
+        client.release()
+    }
+}
+
 export const confirmTransaction = async (req, res) => {
     const { token_ws } = req.query
     const frontendUrl = process.env.FRONTEND_URL
