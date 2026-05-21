@@ -1,4 +1,5 @@
 import pool from "../config/db.js"
+import { releaseExpiredReservations } from "./cartController.js"
 
 export const setCredit = async (req, res) => {
     const { userId } = req.params
@@ -81,6 +82,7 @@ export const payWithCredit = async (req, res) => {
     const { installments, address } = req.body
     const client = await pool.connect()
     try {
+        await releaseExpiredReservations()
         await client.query("BEGIN")
 
         const userResult = await client.query(
@@ -164,10 +166,6 @@ export const payWithCredit = async (req, res) => {
                 `INSERT INTO order_items (order_id, product_id, quantity, price)
          VALUES ($1, $2, $3, $4)`,
                 [order.id, item.product_id, item.quantity, item.price]
-            )
-            await client.query(
-                "UPDATE products SET stock = stock - $1 WHERE id = $2",
-                [item.quantity, item.product_id]
             )
         }
 

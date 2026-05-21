@@ -1,25 +1,42 @@
 import pool from "../config/db.js"
 
-const releaseExpiredReservations = async () => {
-    const expired = await pool.query(
-        `SELECT * FROM stock_reservations WHERE expires_at < NOW()`
-    )
-    for (const reservation of expired.rows) {
-        await pool.query(
-            "UPDATE products SET stock = stock + $1 WHERE id = $2",
-            [reservation.quantity, reservation.product_id]
+export const releaseExpiredReservations = async () => {
+    const client = await pool.connect()
+    try {
+        await client.query("BEGIN")
+        const expired = await client.query(
+            `SELECT * FROM stock_reservations WHERE expires_at < NOW() FOR UPDATE`
         )
+        for (const reservation of expired.rows) {
+            await client.query(
+                "UPDATE products SET stock = stock + $1 WHERE id = $2",
+                [reservation.quantity, reservation.product_id]
+            )
+            await client.query(
+                "DELETE FROM cart_items WHERE user_id = $1 AND product_id = $2",
+                [reservation.user_id, reservation.product_id]
+            )
+        }
+        await client.query("DELETE FROM stock_reservations WHERE expires_at < NOW()")
+        await client.query("COMMIT")
+    } catch (err) {
+        await client.query("ROLLBACK")
+        throw err
+    } finally {
+        client.release()
     }
-    await pool.query("DELETE FROM stock_reservations WHERE expires_at < NOW()")
 }
 
 export const getCart = async (req, res) => {
     try {
         await releaseExpiredReservations()
         const result = await pool.query(
-            `SELECT ci.id, ci.product_id, p.name, p.price, p.image_url, ci.quantity
+            `SELECT ci.id, ci.product_id, p.name, p.price, p.image_url, ci.quantity,
+                    sr.expires_at as reservation_expires_at
        FROM cart_items ci
        JOIN products p ON ci.product_id = p.id
+       LEFT JOIN stock_reservations sr
+         ON sr.user_id = ci.user_id AND sr.product_id = ci.product_id
        WHERE ci.user_id = $1`,
             [req.user.id]
         )
@@ -99,6 +116,7 @@ export const updateQuantity = async (req, res) => {
     const { quantity } = req.body
     const client = await pool.connect()
     try {
+        await releaseExpiredReservations()
         await client.query("BEGIN")
 
         const cartItem = await client.query(

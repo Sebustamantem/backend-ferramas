@@ -1,5 +1,6 @@
 import { WebpayPlus, Options, IntegrationApiKeys, IntegrationCommerceCodes, Environment } from "transbank-sdk"
 import pool from "../config/db.js"
+import { releaseExpiredReservations } from "./cartController.js"
 import "dotenv/config"
 
 const tx = new WebpayPlus.Transaction(
@@ -14,6 +15,7 @@ export const createTransaction = async (req, res) => {
     const { address } = req.body
 
     try {
+        await releaseExpiredReservations()
         const backendUrl = process.env.BACKEND_URL
 
         if (!backendUrl) {
@@ -146,18 +148,6 @@ export const confirmTransaction = async (req, res) => {
                 [orderId]
             )
 
-            await pool.query(
-                `DELETE FROM cart_items
-                 WHERE user_id = $1`,
-                [order.user_id]
-            )
-
-            await pool.query(
-                `DELETE FROM stock_reservations
-                 WHERE user_id = $1`,
-                [order.user_id]
-            )
-
             const items = await pool.query(
                 `SELECT product_id, quantity
                  FROM order_items
@@ -166,18 +156,59 @@ export const confirmTransaction = async (req, res) => {
             )
 
             for (const item of items.rows) {
-                await pool.query(
-                    `UPDATE products
-                     SET stock = stock - $1
-                     WHERE id = $2`,
-                    [item.quantity, item.product_id]
+                const reservation = await pool.query(
+                    `SELECT quantity
+                     FROM stock_reservations
+                     WHERE user_id = $1 AND product_id = $2`,
+                    [order.user_id, item.product_id]
                 )
+                const reservedQuantity = Number(reservation.rows[0]?.quantity || 0)
+                const missingQuantity = Math.max(Number(item.quantity) - reservedQuantity, 0)
+                if (missingQuantity > 0) {
+                    await pool.query(
+                        `UPDATE products
+                         SET stock = stock - $1
+                         WHERE id = $2`,
+                        [missingQuantity, item.product_id]
+                    )
+                }
             }
+
+            await pool.query(`DELETE FROM cart_items WHERE user_id = $1`, [order.user_id])
+            await pool.query(`DELETE FROM stock_reservations WHERE user_id = $1`, [order.user_id])
 
             return res.redirect(
                 `${frontendUrl.replace(/\/$/, "")}/checkout/success?order_id=${orderId}`
             )
         }
+
+        const reservations = await pool.query(
+            `SELECT product_id, quantity
+             FROM stock_reservations
+             WHERE user_id = $1`,
+            [order.user_id]
+        )
+
+        for (const reservation of reservations.rows) {
+            await pool.query(
+                `UPDATE products
+                 SET stock = stock + $1
+                 WHERE id = $2`,
+                [reservation.quantity, reservation.product_id]
+            )
+        }
+
+        await pool.query(
+            `DELETE FROM stock_reservations
+             WHERE user_id = $1`,
+            [order.user_id]
+        )
+
+        await pool.query(
+            `DELETE FROM cart_items
+             WHERE user_id = $1`,
+            [order.user_id]
+        )
 
         await pool.query(
             `UPDATE orders
