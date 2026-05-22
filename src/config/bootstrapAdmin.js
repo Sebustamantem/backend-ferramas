@@ -152,12 +152,15 @@ export const bootstrapAdmin = async () => {
     const hashedPassword = await bcrypt.hash(temporaryPassword, 10)
 
     const existingAdmin = await pool.query(
-        "SELECT id, email FROM users WHERE role='admin' ORDER BY id ASC LIMIT 1"
+        "SELECT id, email, must_change_password FROM users WHERE role='admin' ORDER BY id ASC LIMIT 1"
     )
 
     if (existingAdmin.rows.length > 0) {
         const admin = existingAdmin.rows[0]
-        if (process.env.RESET_BOOTSTRAP_ADMIN_PASSWORD === "true") {
+        const forceReset = process.env.FORCE_RESET_BOOTSTRAP_ADMIN_PASSWORD === "true"
+        const resetPendingAdmin = process.env.RESET_BOOTSTRAP_ADMIN_PASSWORD === "true" && admin.must_change_password
+
+        if (forceReset || resetPendingAdmin) {
             await pool.query(
                 `UPDATE users
                  SET password=$1, must_change_password=TRUE
@@ -169,6 +172,7 @@ export const bootstrapAdmin = async () => {
                 reset: true,
                 email: admin.email,
                 temporaryPassword,
+                forced: forceReset,
             }
         }
 
@@ -176,6 +180,7 @@ export const bootstrapAdmin = async () => {
             created: false,
             reset: false,
             email: admin.email,
+            passwordAlreadyChanged: !admin.must_change_password,
         }
     }
 
