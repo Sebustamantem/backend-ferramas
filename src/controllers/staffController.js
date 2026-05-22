@@ -1,10 +1,12 @@
 import pool from "../config/db.js"
+import { ensureCommerceTables } from "../config/bootstrapAdmin.js"
 import { addPointsForOrder, restoreUsedPointsForOrder } from "./pointsController.js"
 import { cancelServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
 import { ensureSurveyTable } from "./surveyController.js"
 
 export const getAdminDashboard = async (req, res) => {
     try {
+        await ensureCommerceTables()
         await ensureSurveyTable()
         await ensureServiceTables()
 

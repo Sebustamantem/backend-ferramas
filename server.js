@@ -1,7 +1,7 @@
 import "dotenv/config"
 import app from "./src/app.js"
 import pool from "./src/config/db.js"
-import { bootstrapAdmin } from "./src/config/bootstrapAdmin.js"
+import { bootstrapAdmin, ensureCommerceTables } from "./src/config/bootstrapAdmin.js"
 
 const PORT = process.env.PORT || 3000
 
@@ -11,6 +11,7 @@ const startServer = async () => {
         console.log("Conectado a Neon PostgreSQL")
 
         const admin = await bootstrapAdmin()
+        await ensureCommerceTables()
         if (admin.created) {
             console.log("Admin inicial creado automaticamente")
             console.log(`Email: ${admin.email}`)

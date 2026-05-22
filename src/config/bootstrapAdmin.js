@@ -44,6 +44,104 @@ export const ensureUsersTable = async () => {
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()")
 }
 
+export const ensureCommerceTables = async () => {
+    await ensureUsersTable()
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS products (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(180) NOT NULL,
+            description TEXT,
+            price NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            stock INTEGER NOT NULL DEFAULT 0,
+            image_url TEXT,
+            category VARCHAR(80),
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS cart_items (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(user_id, product_id)
+        )
+    `)
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS stock_reservations (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            expires_at TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS orders (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            total NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            status VARCHAR(40) NOT NULL DEFAULT 'pending',
+            address JSONB,
+            transbank_token TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS order_items (
+            id SERIAL PRIMARY KEY,
+            order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+            product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+            quantity INTEGER NOT NULL DEFAULT 1,
+            price NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS ferre_credits (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            credit_limit NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            balance_used NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS ferre_credit_installments (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+            total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            installments INTEGER NOT NULL DEFAULT 1,
+            amount_per_installment NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            paid_installments INTEGER NOT NULL DEFAULT 0,
+            status VARCHAR(30) NOT NULL DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS ferre_credit_payments (
+            id SERIAL PRIMARY KEY,
+            installment_id INTEGER REFERENCES ferre_credit_installments(id) ON DELETE CASCADE,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+}
+
 export const bootstrapAdmin = async () => {
     await ensureUsersTable()
 

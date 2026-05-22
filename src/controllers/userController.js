@@ -1,7 +1,14 @@
 import pool from "../config/db.js"
 import bcrypt from "bcryptjs"
+import crypto from "crypto"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
+const staffRoles = ["vendedor", "bodeguero", "contador"]
+
+const generateTemporaryPassword = () => {
+    const random = crypto.randomBytes(6).toString("base64url")
+    return `Ferre${random}1`
+}
 
 export const getAllUsers = async (req, res) => {
     try {
@@ -60,6 +67,51 @@ export const updateUserRole = async (req, res) => {
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar rol", error: err.message })
+    }
+}
+
+export const createStaffUser = async (req, res) => {
+    const { name, lastname, email, rut, phone, role, password } = req.body
+
+    if (!staffRoles.includes(role)) {
+        return res.status(400).json({ message: "Solo puedes crear vendedor, bodeguero o contador" })
+    }
+
+    if (!name || !email) {
+        return res.status(400).json({ message: "Nombre y email son obligatorios" })
+    }
+
+    try {
+        const exists = await pool.query("SELECT id FROM users WHERE LOWER(email)=LOWER($1)", [email])
+        if (exists.rows.length > 0) {
+            return res.status(400).json({ message: "El email ya esta registrado" })
+        }
+
+        if (rut) {
+            const rutExists = await pool.query("SELECT id FROM users WHERE rut=$1", [rut])
+            if (rutExists.rows.length > 0) {
+                return res.status(400).json({ message: "El RUT ya esta registrado" })
+            }
+        }
+
+        const temporaryPassword = password || generateTemporaryPassword()
+        const hashed = await bcrypt.hash(temporaryPassword, 10)
+        const result = await pool.query(
+            `INSERT INTO users (
+                name, lastname, email, password, rut, phone, role, user_type, must_change_password
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 'cliente', TRUE)
+             RETURNING id, name, lastname, email, rut, phone, role, user_type, created_at`,
+            [name, lastname || "", email, hashed, rut || null, phone || null, role]
+        )
+
+        res.status(201).json({
+            user: result.rows[0],
+            temporary_password: temporaryPassword,
+            message: "Usuario interno creado. Debe cambiar la contrasena al iniciar sesion.",
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al crear usuario interno", error: err.message })
     }
 }
 
