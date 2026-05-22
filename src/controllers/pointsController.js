@@ -34,8 +34,17 @@ export const getMyPoints = async (req, res) => {
     }
 }
 
+export const calculatePointsForAmount = (amount) => {
+    const purchaseAmount = Number(amount || 0)
+    if (purchaseAmount <= 0) return 0
+    if (purchaseAmount >= 50000) return 250
+    if (purchaseAmount >= 30000) return 200
+    if (purchaseAmount >= 10000) return 150
+    return 100
+}
+
 export const addPointsForOrder = async (client, userId, orderId, amount) => {
-    const points = Math.floor(Number(amount || 0) / 1000)
+    const points = calculatePointsForAmount(amount)
     if (points <= 0) return 0
 
     const existing = await client.query(

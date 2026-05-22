@@ -1,4 +1,5 @@
 import pool from "../config/db.js"
+import { sendServiceContactEmail } from "../utils/email.js"
 
 const SERVICE_PRICE = 5000
 
@@ -230,22 +231,7 @@ export const markServiceRequestsPaid = async (client, orderId) => {
         [orderId]
     )
     for (const request of result.rows) {
-        console.log("Correo mixto servicio Ferremas:", {
-            to: [request.customer_email, request.professional_email].filter(Boolean),
-            subject: `Contacto por asesoria FERREMAS - Pedido #${orderId}`,
-            cliente: {
-                nombre: request.customer_name,
-                email: request.customer_email,
-                telefono: request.customer_phone,
-            },
-            profesional: {
-                nombre: request.professional_name,
-                email: request.professional_email,
-                telefono: request.professional_phone,
-            },
-            monto_confirmacion: request.amount,
-            nota: "FERREMAS solo cobra la confirmacion de contacto. El servicio final se acuerda y paga directamente entre cliente y maestro/PYME.",
-        })
+        await sendServiceContactEmail({ request, orderId })
         await client.query(
             "UPDATE service_requests SET contact_email_sent_at=NOW() WHERE id=$1",
             [request.id]

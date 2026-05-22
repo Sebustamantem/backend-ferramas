@@ -1,4 +1,5 @@
 import pool from "../config/db.js"
+import { calculatePointsForAmount, ensurePointsTables } from "./pointsController.js"
 
 export const createOrder = async (req, res) => {
     const { address } = req.body
@@ -119,6 +120,7 @@ export const updateOrderStatus = async (req, res) => {
 export const getOrderById = async (req, res) => {
     const { id } = req.params
     try {
+        await ensurePointsTables()
         const order = await pool.query(
             `SELECT o.*, u.name as user_name, u.email as user_email,
         COALESCE(json_agg(json_build_object(
@@ -145,7 +147,28 @@ export const getOrderById = async (req, res) => {
              WHERE sr.order_id=$1`,
             [id]
         )
-        res.json({ ...order.rows[0], service_requests: services.rows })
+        const pointSummary = await pool.query(
+            `SELECT
+                COALESCE(SUM(CASE WHEN type='earned' THEN points ELSE 0 END), 0) as points_earned,
+                COALESCE(SUM(CASE WHEN type='used' THEN points ELSE 0 END), 0) as points_used,
+                COALESCE(SUM(CASE WHEN type='refunded' THEN points ELSE 0 END), 0) as points_refunded
+             FROM point_transactions
+             WHERE order_id=$1`,
+            [id]
+        )
+        const productTotal = order.rows[0].items.reduce(
+            (acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0),
+            0
+        )
+        const calculatedPoints = calculatePointsForAmount(productTotal)
+        res.json({
+            ...order.rows[0],
+            service_requests: services.rows,
+            points_earned: calculatedPoints,
+            points_earned_recorded: Number(pointSummary.rows[0]?.points_earned || 0),
+            points_used: Number(pointSummary.rows[0]?.points_used || 0),
+            points_refunded: Number(pointSummary.rows[0]?.points_refunded || 0),
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener orden", error: err.message })
     }
