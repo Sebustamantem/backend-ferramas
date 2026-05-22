@@ -45,6 +45,9 @@ export const ensureServiceTables = async () => {
     await pool.query("ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS professional_email VARCHAR(160)")
     await pool.query("ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS professional_phone VARCHAR(40)")
     await pool.query("ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS contact_email_sent_at TIMESTAMP")
+    await pool.query("ALTER TABLE professional_services ADD COLUMN IF NOT EXISTS region VARCHAR(80)")
+    await pool.query("ALTER TABLE professional_services ADD COLUMN IF NOT EXISTS availability VARCHAR(160)")
+    await pool.query("ALTER TABLE professional_services ADD COLUMN IF NOT EXISTS reference_price INTEGER")
 }
 
 export const getServices = async (req, res) => {
@@ -67,7 +70,14 @@ export const getMyServices = async (req, res) => {
     try {
         await ensureServiceTables()
         const result = await pool.query(
-            "SELECT * FROM professional_services WHERE user_id=$1 ORDER BY created_at DESC",
+            `SELECT ps.*,
+                    COUNT(sr.id)::int as request_count,
+                    COALESCE(SUM(CASE WHEN sr.status='paid_contact_fee' THEN sr.amount ELSE 0 END), 0)::int as confirmation_total
+             FROM professional_services ps
+             LEFT JOIN service_requests sr ON sr.service_id = ps.id
+             WHERE ps.user_id=$1
+             GROUP BY ps.id
+             ORDER BY ps.created_at DESC`,
             [req.user.id]
         )
         res.json(result.rows)
@@ -77,7 +87,7 @@ export const getMyServices = async (req, res) => {
 }
 
 export const createService = async (req, res) => {
-    const { title, description, category, city, phone } = req.body
+    const { title, description, category, region, city, phone, availability, reference_price } = req.body
     try {
         await ensureServiceTables()
         const user = await pool.query(
@@ -88,14 +98,128 @@ export const createService = async (req, res) => {
             return res.status(403).json({ message: "Solo maestros y PYMEs aprobados pueden publicar servicios" })
         }
         const result = await pool.query(
-            `INSERT INTO professional_services (user_id, title, description, category, city, phone, email)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO professional_services (
+                user_id, title, description, category, region, city, phone, email, availability, reference_price
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              RETURNING *`,
-            [req.user.id, title, description, category || null, city || null, phone || null, user.rows[0].email]
+            [
+                req.user.id,
+                title,
+                description,
+                category || null,
+                region || null,
+                city || null,
+                phone || null,
+                user.rows[0].email,
+                availability || null,
+                reference_price ? Number(reference_price) : null,
+            ]
         )
         res.status(201).json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al publicar servicio", error: err.message })
+    }
+}
+
+export const updateService = async (req, res) => {
+    const { serviceId } = req.params
+    const { title, description, category, region, city, phone, availability, reference_price } = req.body
+    try {
+        await ensureServiceTables()
+        const result = await pool.query(
+            `UPDATE professional_services
+             SET title=$1, description=$2, category=$3, region=$4, city=$5,
+                 phone=$6, availability=$7, reference_price=$8
+             WHERE id=$9 AND user_id=$10
+             RETURNING *`,
+            [
+                title,
+                description,
+                category || null,
+                region || null,
+                city || null,
+                phone || null,
+                availability || null,
+                reference_price ? Number(reference_price) : null,
+                serviceId,
+                req.user.id,
+            ]
+        )
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Servicio no encontrado" })
+        }
+        res.json(result.rows[0])
+    } catch (err) {
+        res.status(500).json({ message: "Error al actualizar servicio", error: err.message })
+    }
+}
+
+export const updateServiceStatus = async (req, res) => {
+    const { serviceId } = req.params
+    const { is_active } = req.body
+    try {
+        await ensureServiceTables()
+        const result = await pool.query(
+            `UPDATE professional_services
+             SET is_active=$1
+             WHERE id=$2 AND user_id=$3
+             RETURNING *`,
+            [Boolean(is_active), serviceId, req.user.id]
+        )
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Servicio no encontrado" })
+        }
+        res.json(result.rows[0])
+    } catch (err) {
+        res.status(500).json({ message: "Error al cambiar estado del servicio", error: err.message })
+    }
+}
+
+export const deleteService = async (req, res) => {
+    const { serviceId } = req.params
+    try {
+        await ensureServiceTables()
+        const result = await pool.query(
+            "DELETE FROM professional_services WHERE id=$1 AND user_id=$2 RETURNING id",
+            [serviceId, req.user.id]
+        )
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Servicio no encontrado" })
+        }
+        res.json({ message: "Servicio eliminado" })
+    } catch (err) {
+        res.status(500).json({ message: "Error al eliminar servicio", error: err.message })
+    }
+}
+
+export const getMyServiceRequests = async (req, res) => {
+    try {
+        await ensureServiceTables()
+        const requests = await pool.query(
+            `SELECT sr.*, ps.title, ps.category, ps.region, ps.city
+             FROM service_requests sr
+             JOIN professional_services ps ON sr.service_id = ps.id
+             WHERE ps.user_id=$1
+             ORDER BY sr.created_at DESC`,
+            [req.user.id]
+        )
+        const summary = await pool.query(
+            `SELECT
+                COUNT(sr.id)::int as total_requests,
+                COUNT(sr.id) FILTER (WHERE sr.status='paid_contact_fee')::int as paid_requests,
+                COALESCE(SUM(CASE WHEN sr.status='paid_contact_fee' THEN sr.amount ELSE 0 END), 0)::int as confirmation_total
+             FROM service_requests sr
+             JOIN professional_services ps ON sr.service_id = ps.id
+             WHERE ps.user_id=$1`,
+            [req.user.id]
+        )
+        res.json({
+            summary: summary.rows[0],
+            requests: requests.rows,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener solicitudes", error: err.message })
     }
 }
 
