@@ -212,7 +212,8 @@ export const payWithCredit = async (req, res) => {
             discountApplied = true
         }
 
-        const shipping = total >= 50000 ? 0 : 4990
+        const discountedProductTotal = !user.first_purchase_used ? productSubtotal * 0.7 : productSubtotal
+        const shipping = discountedProductTotal > 0 && discountedProductTotal < 50000 ? 4990 : 0
         const beforePointsTotal = Math.round(total + shipping)
 
         const orderResult = await client.query(
@@ -268,7 +269,7 @@ export const payWithCredit = async (req, res) => {
         await client.query("DELETE FROM cart_items WHERE user_id = $1", [req.user.id])
         await client.query("DELETE FROM stock_reservations WHERE user_id = $1", [req.user.id])
         await clearServiceCart(client, req.user.id)
-        const pointsEarned = await addPointsForOrder(client, req.user.id, order.id, finalTotal)
+        const pointsEarned = await addPointsForOrder(client, req.user.id, order.id, discountedProductTotal)
 
         await client.query("COMMIT")
 

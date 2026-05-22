@@ -43,6 +43,7 @@ export const ensureServiceTables = async () => {
     await pool.query("ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS professional_name VARCHAR(160)")
     await pool.query("ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS professional_email VARCHAR(160)")
     await pool.query("ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS professional_phone VARCHAR(40)")
+    await pool.query("ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS contact_email_sent_at TIMESTAMP")
 }
 
 export const getServices = async (req, res) => {
@@ -230,11 +231,25 @@ export const markServiceRequestsPaid = async (client, orderId) => {
     )
     for (const request of result.rows) {
         console.log("Correo mixto servicio Ferremas:", {
-            cliente: request.customer_email,
-            maestro: request.professional_email,
-            servicio_id: request.service_id,
-            orden: orderId,
+            to: [request.customer_email, request.professional_email].filter(Boolean),
+            subject: `Contacto por asesoria FERREMAS - Pedido #${orderId}`,
+            cliente: {
+                nombre: request.customer_name,
+                email: request.customer_email,
+                telefono: request.customer_phone,
+            },
+            profesional: {
+                nombre: request.professional_name,
+                email: request.professional_email,
+                telefono: request.professional_phone,
+            },
+            monto_confirmacion: request.amount,
+            nota: "FERREMAS solo cobra la confirmacion de contacto. El servicio final se acuerda y paga directamente entre cliente y maestro/PYME.",
         })
+        await client.query(
+            "UPDATE service_requests SET contact_email_sent_at=NOW() WHERE id=$1",
+            [request.id]
+        )
     }
     return result.rows
 }

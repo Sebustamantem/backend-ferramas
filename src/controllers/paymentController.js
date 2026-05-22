@@ -44,7 +44,13 @@ export const createTransaction = async (req, res) => {
             [req.user.id]
         )
 
-        if (cartItems.rows.length === 0) {
+        const serviceCart = await pool.query(
+            "SELECT COUNT(*)::int as count FROM service_cart_items WHERE user_id=$1",
+            [req.user.id]
+        )
+        const serviceTotal = Number(serviceCart.rows[0]?.count || 0) * 5000
+
+        if (cartItems.rows.length === 0 && serviceTotal === 0) {
             return res.status(400).json({
                 message: "El carrito está vacío",
             })
@@ -56,7 +62,7 @@ export const createTransaction = async (req, res) => {
         )
         const total = productTotal + serviceTotal
 
-        const shipping = total >= 50000 ? 0 : 4990
+        const shipping = productTotal > 0 && productTotal < 50000 ? 4990 : 0
         const beforePointsTotal = Math.round(total + shipping)
 
         const orderResult = await pool.query(
@@ -176,7 +182,7 @@ export const createTransferOrder = async (req, res) => {
             0
         )
         const subtotal = productSubtotal + serviceTotal
-        const shipping = subtotal >= 50000 ? 0 : 4990
+        const shipping = productSubtotal > 0 && productSubtotal < 50000 ? 4990 : 0
         const beforePointsTotal = Math.round(subtotal + shipping)
 
         const orderResult = await client.query(
@@ -285,7 +291,7 @@ export const confirmTransaction = async (req, res) => {
             )
 
             const items = await pool.query(
-                `SELECT product_id, quantity
+                `SELECT product_id, quantity, price
                  FROM order_items
                  WHERE order_id = $1`,
                 [orderId]
@@ -314,7 +320,11 @@ export const confirmTransaction = async (req, res) => {
             await pool.query(`DELETE FROM stock_reservations WHERE user_id = $1`, [order.user_id])
             await clearServiceCart(pool, order.user_id)
             await markServiceRequestsPaid(pool, orderId)
-            await addPointsForOrder(pool, order.user_id, orderId, order.total)
+            const productPointsTotal = items.rows.reduce(
+                (acc, item) => acc + Number(item.price || 0) * Number(item.quantity || 0),
+                0
+            )
+            await addPointsForOrder(pool, order.user_id, orderId, productPointsTotal)
 
             return res.redirect(
                 `${frontendUrl.replace(/\/$/, "")}/checkout/success?order_id=${orderId}`

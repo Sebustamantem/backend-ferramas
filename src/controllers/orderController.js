@@ -60,8 +60,8 @@ export const getMyOrders = async (req, res) => {
           'image_url', p.image_url
         )) FILTER (WHERE oi.id IS NOT NULL), '[]') as items
        FROM orders o
-       JOIN order_items oi ON o.id = oi.order_id
-       JOIN products p ON oi.product_id = p.id
+       LEFT JOIN order_items oi ON o.id = oi.order_id
+       LEFT JOIN products p ON oi.product_id = p.id
        WHERE o.user_id = $1
        GROUP BY o.id
        ORDER BY o.created_at DESC`,
@@ -77,17 +77,17 @@ export const getAllOrders = async (req, res) => {
     try {
         const orders = await pool.query(
             `SELECT o.*, u.name as user_name, u.email as user_email,
-        json_agg(json_build_object(
+        COALESCE(json_agg(json_build_object(
           'product_id', oi.product_id,
           'name', p.name,
           'quantity', oi.quantity,
           'price', oi.price,
           'image_url', p.image_url
-        )) as items
+        )) FILTER (WHERE oi.id IS NOT NULL), '[]') as items
        FROM orders o
        JOIN users u ON o.user_id = u.id
-       JOIN order_items oi ON o.id = oi.order_id
-       JOIN products p ON oi.product_id = p.id
+       LEFT JOIN order_items oi ON o.id = oi.order_id
+       LEFT JOIN products p ON oi.product_id = p.id
        GROUP BY o.id, u.name, u.email
        ORDER BY o.created_at DESC`
         )
@@ -121,13 +121,13 @@ export const getOrderById = async (req, res) => {
     try {
         const order = await pool.query(
             `SELECT o.*, u.name as user_name, u.email as user_email,
-        json_agg(json_build_object(
+        COALESCE(json_agg(json_build_object(
           'product_id', oi.product_id,
           'name', p.name,
           'quantity', oi.quantity,
           'price', oi.price,
           'image_url', p.image_url
-        )) as items
+        )) FILTER (WHERE oi.id IS NOT NULL), '[]') as items
        FROM orders o
        JOIN users u ON o.user_id = u.id
        LEFT JOIN order_items oi ON o.id = oi.order_id
