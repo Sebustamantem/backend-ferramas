@@ -16,6 +16,14 @@ const startServer = async () => {
             console.log(`Email: ${admin.email}`)
             console.log(`Clave temporal: ${admin.temporaryPassword}`)
             console.log("Al iniciar sesion se pedira cambiar la clave.")
+        } else if (admin.reset) {
+            console.log("Clave temporal de admin regenerada")
+            console.log(`Email: ${admin.email}`)
+            console.log(`Clave temporal: ${admin.temporaryPassword}`)
+            console.log("Al iniciar sesion se pedira cambiar la clave.")
+        } else {
+            console.log(`Admin existente detectado: ${admin.email}`)
+            console.log("No se crea clave temporal nueva. Usa RESET_BOOTSTRAP_ADMIN_PASSWORD=true para regenerarla.")
         }
 
         app.listen(PORT, () => {
