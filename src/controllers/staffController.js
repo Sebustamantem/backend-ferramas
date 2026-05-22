@@ -1,6 +1,90 @@
 import pool from "../config/db.js"
 import { addPointsForOrder, restoreUsedPointsForOrder } from "./pointsController.js"
-import { cancelServiceRequestsForOrder, markServiceRequestsPaid } from "./serviceController.js"
+import { cancelServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
+import { ensureSurveyTable } from "./surveyController.js"
+
+export const getAdminDashboard = async (req, res) => {
+    try {
+        await ensureSurveyTable()
+        await ensureServiceTables()
+
+        const [
+            salesToday,
+            pendingOrders,
+            newUsers,
+            services,
+            surveySummary,
+            recentSurveys,
+            recentOrders,
+        ] = await Promise.all([
+            pool.query(
+                `SELECT COALESCE(SUM(total), 0) as total, COUNT(*)::int as count
+                 FROM orders
+                 WHERE status IN ('paid', 'processing', 'shipped', 'delivered')
+                   AND created_at::date = CURRENT_DATE`
+            ),
+            pool.query(
+                `SELECT COUNT(*)::int as count
+                 FROM orders
+                 WHERE status IN ('pending', 'transfer_pending', 'paid')`
+            ),
+            pool.query(
+                `SELECT COUNT(*)::int as count
+                 FROM users
+                 WHERE created_at >= NOW() - INTERVAL '7 days'`
+            ),
+            pool.query(
+                `SELECT
+                    COUNT(*)::int as total,
+                    COUNT(*) FILTER (WHERE is_active = TRUE)::int as active
+                 FROM professional_services`
+            ),
+            pool.query(
+                `SELECT
+                    COUNT(*)::int as total,
+                    COALESCE(ROUND(AVG(rating)::numeric, 1), 0) as average_rating
+                 FROM satisfaction_surveys`
+            ),
+            pool.query(
+                `SELECT ss.id, ss.order_id, ss.rating, ss.comment, ss.created_at,
+                        u.name as user_name, u.lastname as user_lastname, u.email as user_email
+                 FROM satisfaction_surveys ss
+                 LEFT JOIN users u ON ss.user_id = u.id
+                 ORDER BY ss.created_at DESC
+                 LIMIT 8`
+            ),
+            pool.query(
+                `SELECT o.id, o.total, o.status, o.created_at,
+                        u.name as user_name, u.lastname as user_lastname, u.email as user_email
+                 FROM orders o
+                 LEFT JOIN users u ON o.user_id = u.id
+                 ORDER BY o.created_at DESC
+                 LIMIT 6`
+            ),
+        ])
+
+        res.json({
+            sales_today: {
+                total: Number(salesToday.rows[0]?.total || 0),
+                count: Number(salesToday.rows[0]?.count || 0),
+            },
+            pending_orders: Number(pendingOrders.rows[0]?.count || 0),
+            new_users_7d: Number(newUsers.rows[0]?.count || 0),
+            services: {
+                total: Number(services.rows[0]?.total || 0),
+                active: Number(services.rows[0]?.active || 0),
+            },
+            surveys: {
+                total: Number(surveySummary.rows[0]?.total || 0),
+                average_rating: Number(surveySummary.rows[0]?.average_rating || 0),
+                comments: recentSurveys.rows,
+            },
+            recent_orders: recentOrders.rows,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener dashboard admin", error: err.message })
+    }
+}
 
 // ===== VENDEDOR =====
 

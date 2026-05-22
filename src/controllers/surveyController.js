@@ -1,6 +1,6 @@
 import pool from "../config/db.js"
 
-const ensureSurveyTable = async () => {
+export const ensureSurveyTable = async () => {
     await pool.query(`
         CREATE TABLE IF NOT EXISTS satisfaction_surveys (
             id SERIAL PRIMARY KEY,
@@ -16,6 +16,33 @@ const ensureSurveyTable = async () => {
         ON satisfaction_surveys(user_id, order_id)
         WHERE order_id IS NOT NULL
     `)
+}
+
+export const getSurveySummary = async (req, res) => {
+    try {
+        await ensureSurveyTable()
+        const summary = await pool.query(
+            `SELECT
+                COUNT(*)::int as total,
+                COALESCE(ROUND(AVG(rating)::numeric, 1), 0) as average_rating
+             FROM satisfaction_surveys`
+        )
+        const comments = await pool.query(
+            `SELECT ss.id, ss.order_id, ss.rating, ss.comment, ss.created_at,
+                    u.name as user_name, u.lastname as user_lastname, u.email as user_email
+             FROM satisfaction_surveys ss
+             LEFT JOIN users u ON ss.user_id = u.id
+             ORDER BY ss.created_at DESC
+             LIMIT 50`
+        )
+        res.json({
+            total: Number(summary.rows[0]?.total || 0),
+            average_rating: Number(summary.rows[0]?.average_rating || 0),
+            comments: comments.rows,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener encuestas", error: err.message })
+    }
 }
 
 export const submitSurvey = async (req, res) => {

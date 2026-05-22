@@ -1,12 +1,16 @@
 import { Router } from "express"
 import {
+    getAdminDashboard,
     getOrders, updateOrderStatus, getClients,
     getInventory, updateStock, getOrdersForWarehouse, dispatchOrder, updateWarehouseOrderStatus,
     getAccountingOrders, confirmTransferOrder, rejectTransferOrder, registerDeliveredOrder
 } from "../controllers/staffController.js"
-import { verifyToken, verifyVendedor, verifyBodeguero, verifyContador } from "../middleware/authMiddleware.js"
+import { verifyToken, verifyAdmin, verifyVendedor, verifyBodeguero, verifyContador } from "../middleware/authMiddleware.js"
 
 const router = Router()
+
+// Admin
+router.get("/admin/dashboard", verifyToken, verifyAdmin, getAdminDashboard)
 
 // Vendedor
 router.get("/orders", verifyToken, verifyVendedor, getOrders)

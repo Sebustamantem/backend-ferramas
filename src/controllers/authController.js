@@ -1,12 +1,14 @@
 import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
 import pool from "../config/db.js"
+import { ensureUsersTable } from "../config/bootstrapAdmin.js"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
 
 export const register = async (req, res) => {
     const { name, lastname, email, password, rut, phone, user_type, business_name, profession } = req.body
     try {
+        await ensureUsersTable()
         const exists = await pool.query("SELECT id FROM users WHERE email = $1", [email])
         if (exists.rows.length > 0)
             return res.status(400).json({ message: "El email ya está registrado" })
@@ -39,6 +41,7 @@ export const login = async (req, res) => {
     const { email, password } = req.body
     const identifier = String(email || "").trim()
     try {
+        await ensureUsersTable()
         const result = await pool.query(
             `SELECT *
              FROM users
@@ -55,7 +58,8 @@ export const login = async (req, res) => {
         if (!valid)
             return res.status(400).json({ message: "Credenciales inválidas" })
 
-        const mustChangePassword = user.role === "admin" && normalizeRut(password) === normalizeRut(user.rut)
+        const mustChangePassword = Boolean(user.must_change_password)
+            || (user.role === "admin" && normalizeRut(password) === normalizeRut(user.rut))
         const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" })
         res.json({
             user: {

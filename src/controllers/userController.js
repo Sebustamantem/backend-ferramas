@@ -147,7 +147,7 @@ export const changeMyPassword = async (req, res) => {
         const hashed = await bcrypt.hash(password, 10)
         const result = await pool.query(
             `UPDATE users
-             SET password=$1
+             SET password=$1, must_change_password=FALSE
              WHERE id=$2
              RETURNING id, name, lastname, email, phone, role, address, user_type, rut, business_name, profession, first_purchase_used`,
             [hashed, req.user.id]
