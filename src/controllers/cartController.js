@@ -1,4 +1,5 @@
 import pool from "../config/db.js"
+import { clearServiceCart, ensureServiceTables } from "./serviceController.js"
 
 export const releaseExpiredReservations = async () => {
     const client = await pool.connect()
@@ -30,9 +31,15 @@ export const releaseExpiredReservations = async () => {
 export const getCart = async (req, res) => {
     try {
         await releaseExpiredReservations()
-        const result = await pool.query(
+        await ensureServiceTables()
+        const products = await pool.query(
             `SELECT ci.id, ci.product_id, p.name, p.price, p.image_url, ci.quantity,
-                    sr.expires_at as reservation_expires_at
+                    sr.expires_at as reservation_expires_at,
+                    'product' as item_type,
+                    NULL as service_id,
+                    NULL as professional_name,
+                    NULL as professional_email,
+                    NULL as professional_phone
        FROM cart_items ci
        JOIN products p ON ci.product_id = p.id
        LEFT JOIN stock_reservations sr
@@ -40,7 +47,21 @@ export const getCart = async (req, res) => {
        WHERE ci.user_id = $1`,
             [req.user.id]
         )
-        res.json(result.rows)
+        const services = await pool.query(
+            `SELECT sci.id, NULL as product_id, ps.id as service_id, ps.title as name,
+                    5000 as price, NULL as image_url, 1 as quantity,
+                    NULL as reservation_expires_at,
+                    'service' as item_type,
+                    CONCAT(u.name, ' ', COALESCE(u.lastname, '')) as professional_name,
+                    u.email as professional_email,
+                    ps.phone as professional_phone
+             FROM service_cart_items sci
+             JOIN professional_services ps ON sci.service_id = ps.id
+             JOIN users u ON ps.user_id = u.id
+             WHERE sci.user_id = $1`,
+            [req.user.id]
+        )
+        res.json([...products.rows, ...services.rows])
     } catch (err) {
         res.status(500).json({ message: "Error al obtener carrito", error: err.message })
     }
@@ -235,6 +256,7 @@ export const clearCart = async (req, res) => {
             "DELETE FROM cart_items WHERE user_id = $1",
             [req.user.id]
         )
+        await clearServiceCart(client, req.user.id)
 
         await client.query("COMMIT")
         res.json({ message: "Carrito vaciado correctamente" })

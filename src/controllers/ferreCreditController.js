@@ -1,6 +1,7 @@
 import pool from "../config/db.js"
 import { releaseExpiredReservations } from "./cartController.js"
 import { addPointsForOrder, ensurePointsTables, usePointsForOrder } from "./pointsController.js"
+import { clearServiceCart, createServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
 
 export const setCredit = async (req, res) => {
     const { userId } = req.params
@@ -145,6 +146,7 @@ export const payWithCredit = async (req, res) => {
     try {
         await releaseExpiredReservations()
         await ensurePointsTables()
+        await ensureServiceTables()
         await client.query("BEGIN")
 
         const userResult = await client.query(
@@ -191,7 +193,10 @@ export const payWithCredit = async (req, res) => {
             [req.user.id]
         )
 
-        if (cartItems.rows.length === 0) {
+        const serviceCart = await client.query("SELECT COUNT(*)::int as count FROM service_cart_items WHERE user_id=$1", [req.user.id])
+        const serviceTotal = Number(serviceCart.rows[0]?.count || 0) * 5000
+
+        if (cartItems.rows.length === 0 && serviceTotal === 0) {
             await client.query("ROLLBACK")
             return res.status(400).json({ message: "El carrito está vacío" })
         }
@@ -199,6 +204,7 @@ export const payWithCredit = async (req, res) => {
         let total = cartItems.rows.reduce(
             (acc, item) => acc + Number(item.price) * item.quantity, 0
         )
+        total += serviceTotal
 
         let discountApplied = false
         if (!user.first_purchase_used) {
@@ -235,6 +241,8 @@ export const payWithCredit = async (req, res) => {
                 [order.id, item.product_id, item.quantity, item.price]
             )
         }
+        await createServiceRequestsForOrder(client, req.user.id, order.id, "paid_contact_fee")
+        await markServiceRequestsPaid(client, order.id)
 
         const amountPerInstallment = Math.round(finalTotal / installments)
         await client.query(
@@ -259,6 +267,7 @@ export const payWithCredit = async (req, res) => {
 
         await client.query("DELETE FROM cart_items WHERE user_id = $1", [req.user.id])
         await client.query("DELETE FROM stock_reservations WHERE user_id = $1", [req.user.id])
+        await clearServiceCart(client, req.user.id)
         const pointsEarned = await addPointsForOrder(client, req.user.id, order.id, finalTotal)
 
         await client.query("COMMIT")

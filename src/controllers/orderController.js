@@ -52,13 +52,13 @@ export const getMyOrders = async (req, res) => {
     try {
         const orders = await pool.query(
             `SELECT o.*,
-        json_agg(json_build_object(
+        COALESCE(json_agg(json_build_object(
           'product_id', oi.product_id,
           'name', p.name,
           'quantity', oi.quantity,
           'price', oi.price,
           'image_url', p.image_url
-        )) as items
+        )) FILTER (WHERE oi.id IS NOT NULL), '[]') as items
        FROM orders o
        JOIN order_items oi ON o.id = oi.order_id
        JOIN products p ON oi.product_id = p.id
@@ -130,15 +130,22 @@ export const getOrderById = async (req, res) => {
         )) as items
        FROM orders o
        JOIN users u ON o.user_id = u.id
-       JOIN order_items oi ON o.id = oi.order_id
-       JOIN products p ON oi.product_id = p.id
+       LEFT JOIN order_items oi ON o.id = oi.order_id
+       LEFT JOIN products p ON oi.product_id = p.id
        WHERE o.id = $1
        GROUP BY o.id, u.name, u.email`,
             [id]
         )
         if (order.rows.length === 0)
             return res.status(404).json({ message: "Orden no encontrada" })
-        res.json(order.rows[0])
+        const services = await pool.query(
+            `SELECT sr.*, ps.title, ps.description, ps.category, ps.city
+             FROM service_requests sr
+             LEFT JOIN professional_services ps ON sr.service_id = ps.id
+             WHERE sr.order_id=$1`,
+            [id]
+        )
+        res.json({ ...order.rows[0], service_requests: services.rows })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener orden", error: err.message })
     }

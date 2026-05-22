@@ -1,5 +1,6 @@
 import pool from "../config/db.js"
-import { addPointsForOrder } from "./pointsController.js"
+import { addPointsForOrder, restoreUsedPointsForOrder } from "./pointsController.js"
+import { cancelServiceRequestsForOrder, markServiceRequestsPaid } from "./serviceController.js"
 
 // ===== VENDEDOR =====
 
@@ -196,6 +197,7 @@ export const confirmTransferOrder = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(400).json({ message: "El pedido no tiene transferencia pendiente" })
+        await markServiceRequestsPaid(pool, result.rows[0].id)
         await addPointsForOrder(pool, result.rows[0].user_id, result.rows[0].id, result.rows[0].total)
         res.json(result.rows[0])
     } catch (err) {
@@ -234,6 +236,13 @@ export const rejectTransferOrder = async (req, res) => {
         const result = await client.query(
             "UPDATE orders SET status='cancelled' WHERE id=$1 RETURNING *",
             [id]
+        )
+        await cancelServiceRequestsForOrder(client, id)
+        await restoreUsedPointsForOrder(
+            client,
+            order.rows[0].user_id,
+            id,
+            "Devolucion por transferencia rechazada"
         )
         await client.query("COMMIT")
         res.json(result.rows[0])

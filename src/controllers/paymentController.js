@@ -1,7 +1,14 @@
 import { WebpayPlus, Options, IntegrationApiKeys, IntegrationCommerceCodes, Environment } from "transbank-sdk"
 import pool from "../config/db.js"
 import { releaseExpiredReservations } from "./cartController.js"
-import { addPointsForOrder, ensurePointsTables, usePointsForOrder } from "./pointsController.js"
+import { addPointsForOrder, ensurePointsTables, restoreUsedPointsForOrder, usePointsForOrder } from "./pointsController.js"
+import {
+    cancelServiceRequestsForOrder,
+    clearServiceCart,
+    createServiceRequestsForOrder,
+    ensureServiceTables,
+    markServiceRequestsPaid,
+} from "./serviceController.js"
 import "dotenv/config"
 
 const tx = new WebpayPlus.Transaction(
@@ -20,6 +27,7 @@ export const createTransaction = async (req, res) => {
     try {
         await releaseExpiredReservations()
         await ensurePointsTables()
+        await ensureServiceTables()
         const backendUrl = process.env.BACKEND_URL
 
         if (!backendUrl) {
@@ -42,10 +50,11 @@ export const createTransaction = async (req, res) => {
             })
         }
 
-        const total = cartItems.rows.reduce(
+        const productTotal = cartItems.rows.reduce(
             (acc, item) => acc + Number(item.price) * Number(item.quantity),
             0
         )
+        const total = productTotal + serviceTotal
 
         const shipping = total >= 50000 ? 0 : 4990
         const beforePointsTotal = Math.round(total + shipping)
@@ -72,6 +81,7 @@ export const createTransaction = async (req, res) => {
                 [order.id, item.product_id, item.quantity, item.price]
             )
         }
+        await createServiceRequestsForOrder(pool, req.user.id, order.id, "pending_payment")
 
         const buyOrder = `ORDER-${order.id}-${Date.now()}`
         const sessionId = `SESSION-${req.user.id}-${Date.now()}`
@@ -123,6 +133,9 @@ export const createTransaction = async (req, res) => {
                 [req.user.id, createdOrderId, deductedPoints]
             )
         }
+        if (createdOrderId) {
+            await cancelServiceRequestsForOrder(pool, createdOrderId)
+        }
 
         return res.status(500).json({
             message: "Error al crear transacción",
@@ -139,6 +152,7 @@ export const createTransferOrder = async (req, res) => {
     try {
         await releaseExpiredReservations()
         await ensurePointsTables()
+        await ensureServiceTables()
         await client.query("BEGIN")
 
         const cartItems = await client.query(
@@ -149,15 +163,19 @@ export const createTransferOrder = async (req, res) => {
             [req.user.id]
         )
 
-        if (cartItems.rows.length === 0) {
+        const serviceCart = await client.query("SELECT COUNT(*)::int as count FROM service_cart_items WHERE user_id=$1", [req.user.id])
+        const serviceTotal = Number(serviceCart.rows[0]?.count || 0) * 5000
+
+        if (cartItems.rows.length === 0 && serviceTotal === 0) {
             await client.query("ROLLBACK")
             return res.status(400).json({ message: "El carrito esta vacio" })
         }
 
-        const subtotal = cartItems.rows.reduce(
+        const productSubtotal = cartItems.rows.reduce(
             (acc, item) => acc + Number(item.price) * Number(item.quantity),
             0
         )
+        const subtotal = productSubtotal + serviceTotal
         const shipping = subtotal >= 50000 ? 0 : 4990
         const beforePointsTotal = Math.round(subtotal + shipping)
 
@@ -199,9 +217,11 @@ export const createTransferOrder = async (req, res) => {
                 )
             }
         }
+        await createServiceRequestsForOrder(client, req.user.id, order.id, "pending_payment")
 
         await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.user.id])
         await client.query(`DELETE FROM stock_reservations WHERE user_id = $1`, [req.user.id])
+        await clearServiceCart(client, req.user.id)
         await client.query("COMMIT")
 
         return res.status(201).json({
@@ -292,6 +312,8 @@ export const confirmTransaction = async (req, res) => {
 
             await pool.query(`DELETE FROM cart_items WHERE user_id = $1`, [order.user_id])
             await pool.query(`DELETE FROM stock_reservations WHERE user_id = $1`, [order.user_id])
+            await clearServiceCart(pool, order.user_id)
+            await markServiceRequestsPaid(pool, orderId)
             await addPointsForOrder(pool, order.user_id, orderId, order.total)
 
             return res.redirect(
@@ -333,28 +355,9 @@ export const confirmTransaction = async (req, res) => {
              WHERE id = $1`,
             [orderId]
         )
+        await cancelServiceRequestsForOrder(pool, orderId)
 
-        const usedPoints = await pool.query(
-            `SELECT COALESCE(SUM(points), 0) as points
-             FROM point_transactions
-             WHERE order_id=$1 AND type='used'`,
-            [orderId]
-        )
-        const pointsToRestore = Number(usedPoints.rows[0]?.points || 0)
-        if (pointsToRestore > 0) {
-            await pool.query(
-                `INSERT INTO user_points (user_id, balance)
-                 VALUES ($1, $2)
-                 ON CONFLICT (user_id)
-                 DO UPDATE SET balance = user_points.balance + $2, updated_at = NOW()`,
-                [order.user_id, pointsToRestore]
-            )
-            await pool.query(
-                `INSERT INTO point_transactions (user_id, order_id, type, points, description)
-                 VALUES ($1, $2, 'refunded', $3, 'Devolucion por pago rechazado')`,
-                [order.user_id, orderId, pointsToRestore]
-            )
-        }
+        await restoreUsedPointsForOrder(pool, order.user_id, orderId, "Devolucion por pago rechazado")
 
         return res.redirect(`${frontendUrl.replace(/\/$/, "")}/checkout/failure`)
 
