@@ -1,4 +1,5 @@
 import pool from "../config/db.js"
+import { ensureSurveyTable } from "./surveyController.js"
 
 const ensureFavoriteTable = async () => {
     await pool.query(`
@@ -124,5 +125,52 @@ export const toggleFavoriteProduct = async (req, res) => {
         res.status(201).json({ is_favorite: true })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar favorito", error: err.message })
+    }
+}
+
+export const getProductReviews = async (req, res) => {
+    const { id } = req.params
+    try {
+        await ensureSurveyTable()
+        const reviews = await pool.query(
+            `SELECT ss.id, ss.order_id, ss.rating, ss.comment, ss.created_at,
+                    u.name as user_name, u.lastname as user_lastname
+             FROM satisfaction_surveys ss
+             JOIN orders o ON o.id = ss.order_id
+             JOIN order_items oi ON oi.order_id = o.id
+             LEFT JOIN users u ON u.id = ss.user_id
+             WHERE oi.product_id = $1
+             ORDER BY ss.created_at DESC`,
+            [id]
+        )
+        const summary = await pool.query(
+            `SELECT
+                COUNT(*)::int as total,
+                COALESCE(ROUND(AVG(ss.rating)::numeric, 1), 0) as average_rating,
+                COUNT(*) FILTER (WHERE ss.rating = 5)::int as five,
+                COUNT(*) FILTER (WHERE ss.rating = 4)::int as four,
+                COUNT(*) FILTER (WHERE ss.rating = 3)::int as three,
+                COUNT(*) FILTER (WHERE ss.rating = 2)::int as two,
+                COUNT(*) FILTER (WHERE ss.rating = 1)::int as one
+             FROM satisfaction_surveys ss
+             JOIN orders o ON o.id = ss.order_id
+             JOIN order_items oi ON oi.order_id = o.id
+             WHERE oi.product_id = $1`,
+            [id]
+        )
+        res.json({
+            total: Number(summary.rows[0]?.total || 0),
+            average_rating: Number(summary.rows[0]?.average_rating || 0),
+            distribution: {
+                5: Number(summary.rows[0]?.five || 0),
+                4: Number(summary.rows[0]?.four || 0),
+                3: Number(summary.rows[0]?.three || 0),
+                2: Number(summary.rows[0]?.two || 0),
+                1: Number(summary.rows[0]?.one || 0),
+            },
+            reviews: reviews.rows,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener opiniones", error: err.message })
     }
 }

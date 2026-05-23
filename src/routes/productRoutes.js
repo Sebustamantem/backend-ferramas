@@ -6,7 +6,8 @@ import {
     updateProduct,
     deleteProduct,
     getMyFavoriteProducts,
-    toggleFavoriteProduct
+    toggleFavoriteProduct,
+    getProductReviews
 } from "../controllers/productController.js"
 import { verifyToken, verifyAdmin } from "../middleware/authMiddleware.js"
 import { upload } from "../config/cloudinary.js"
@@ -15,6 +16,7 @@ const router = Router()
 
 router.get("/", getProducts)
 router.get("/favorites/my", verifyToken, getMyFavoriteProducts)
+router.get("/:id/reviews", getProductReviews)
 router.get("/:id", getProductById)
 router.post("/:id/favorite", verifyToken, toggleFavoriteProduct)
 router.post("/", verifyToken, verifyAdmin, upload.single("image"), createProduct)
