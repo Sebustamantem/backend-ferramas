@@ -3,6 +3,12 @@ import { releaseExpiredReservations } from "./cartController.js"
 import { addPointsForOrder, ensurePointsTables, usePointsForOrder } from "./pointsController.js"
 import { clearServiceCart, createServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
 
+const getApprovedProfessionalType = (userType) => {
+    if (userType === "maestro_pending") return "maestro"
+    if (userType === "pyme_pending") return "pyme"
+    return userType
+}
+
 export const setCredit = async (req, res) => {
     const { userId } = req.params
     const { credit_limit, is_active } = req.body
@@ -160,11 +166,6 @@ export const payWithCredit = async (req, res) => {
         )
         const user = userResult.rows[0]
 
-        if (!["maestro", "pyme"].includes(user.user_type)) {
-            await client.query("ROLLBACK")
-            return res.status(403).json({ message: "Solo maestros y PYMEs pueden usar FerreCredito" })
-        }
-
         const creditResult = await client.query(
             "SELECT * FROM ferre_credits WHERE user_id = $1",
             [req.user.id]
@@ -175,6 +176,20 @@ export const payWithCredit = async (req, res) => {
         }
 
         const credit = creditResult.rows[0]
+        const approvedType = getApprovedProfessionalType(user.user_type)
+        if (!["maestro", "pyme"].includes(approvedType)) {
+            await client.query("ROLLBACK")
+            return res.status(403).json({ message: "Solo maestros y PYMEs pueden usar FerreCredito" })
+        }
+        if (approvedType !== user.user_type || user.role !== approvedType) {
+            await client.query(
+                "UPDATE users SET user_type=$1, role=$1 WHERE id=$2",
+                [approvedType, req.user.id]
+            )
+            user.user_type = approvedType
+            user.role = approvedType
+        }
+
         const available = Number(credit.credit_limit) - Number(credit.balance_used)
 
         const pendingInstallments = await client.query(

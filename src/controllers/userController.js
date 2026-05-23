@@ -5,6 +5,21 @@ import { formatRut, isRutLengthValid } from "../utils/rut.js"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
 const staffRoles = ["vendedor", "bodeguero", "contador"]
+const professionalTypes = ["maestro", "pyme"]
+
+const resolveProfileUserType = (currentType, requestedType) => {
+    if (!requestedType || requestedType === currentType) return currentType
+    if (requestedType === "cliente") return "cliente"
+    if (requestedType.endsWith("_pending")) return requestedType
+
+    if (professionalTypes.includes(requestedType)) {
+        const pendingType = `${requestedType}_pending`
+        if (currentType === pendingType) return currentType
+        return pendingType
+    }
+
+    return currentType
+}
 
 const generateTemporaryPassword = () => {
     const random = crypto.randomBytes(6).toString("base64url")
@@ -169,8 +184,7 @@ export const updateMyProfile = async (req, res) => {
             [req.user.id]
         )
         const current = currentResult.rows[0]
-        const requestedType = user_type || current.user_type
-        const newType = ["maestro", "pyme"].includes(requestedType) ? `${requestedType}_pending` : requestedType
+        const newType = resolveProfileUserType(current.user_type, user_type)
         const newBusiness = business_name !== undefined ? business_name : current.business_name
         const newProfession = profession !== undefined ? profession : current.profession
         const addressValue = address !== undefined ? JSON.stringify(address) : current.address
