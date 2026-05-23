@@ -1,6 +1,7 @@
 import pool from "../config/db.js"
 import bcrypt from "bcryptjs"
 import crypto from "crypto"
+import { formatRut, isRutLengthValid } from "../utils/rut.js"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
 const staffRoles = ["vendedor", "bodeguero", "contador"]
@@ -98,8 +99,13 @@ export const createStaffUser = async (req, res) => {
             return res.status(400).json({ message: "El email ya esta registrado" })
         }
 
-        if (rut) {
-            const rutExists = await pool.query("SELECT id FROM users WHERE rut=$1", [rut])
+        const formattedRut = rut ? formatRut(rut) : null
+        if (rut && !isRutLengthValid(rut)) {
+            return res.status(400).json({ message: "RUT invalido" })
+        }
+
+        if (formattedRut) {
+            const rutExists = await pool.query("SELECT id FROM users WHERE rut=$1", [formattedRut])
             if (rutExists.rows.length > 0) {
                 return res.status(400).json({ message: "El RUT ya esta registrado" })
             }
@@ -113,7 +119,7 @@ export const createStaffUser = async (req, res) => {
              )
              VALUES ($1, $2, $3, $4, $5, $6, $7, 'cliente', TRUE)
              RETURNING id, name, lastname, email, rut, phone, role, user_type, created_at`,
-            [name, lastname || "", email, hashed, rut || null, phone || null, role]
+            [name, lastname || "", email, hashed, formattedRut, phone || null, role]
         )
 
         res.status(201).json({

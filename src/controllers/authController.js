@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
 import pool from "../config/db.js"
 import { ensureUsersTable } from "../config/bootstrapAdmin.js"
+import { formatRut, isRutLengthValid } from "../utils/rut.js"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
 
@@ -9,11 +10,14 @@ export const register = async (req, res) => {
     const { name, lastname, email, password, rut, phone, user_type, business_name, profession } = req.body
     try {
         await ensureUsersTable()
+        if (!isRutLengthValid(rut))
+            return res.status(400).json({ message: "RUT invalido" })
+        const formattedRut = formatRut(rut)
         const exists = await pool.query("SELECT id FROM users WHERE email = $1", [email])
         if (exists.rows.length > 0)
             return res.status(400).json({ message: "El email ya está registrado" })
 
-        const rutExists = await pool.query("SELECT id FROM users WHERE rut = $1", [rut])
+        const rutExists = await pool.query("SELECT id FROM users WHERE rut = $1", [formattedRut])
         if (rutExists.rows.length > 0)
             return res.status(400).json({ message: "El RUT ya está registrado" })
 
@@ -26,7 +30,7 @@ export const register = async (req, res) => {
             `INSERT INTO users (name, lastname, email, password, rut, phone, role, user_type, business_name, profession)
        VALUES ($1, $2, $3, $4, $5, $6, 'cliente', $7, $8, $9)
        RETURNING id, name, lastname, email, phone, rut, role, user_type, business_name, profession, address`,
-            [name, lastname, email, hashed, rut, phone, type, business_name || null, profession || null]
+            [name, lastname, email, hashed, formattedRut, phone, type, business_name || null, profession || null]
         )
 
         const user = result.rows[0]
