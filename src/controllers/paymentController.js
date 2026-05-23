@@ -19,6 +19,8 @@ const tx = new WebpayPlus.Transaction(
     )
 )
 
+const buildFrontendRoute = (frontendUrl, path) => `${frontendUrl.replace(/\/$/, "")}/#${path}`
+
 export const createTransaction = async (req, res) => {
     const { address, points_to_use = 0, delivery_method = "delivery" } = req.body
     let createdOrderId = null
@@ -262,7 +264,7 @@ export const confirmTransaction = async (req, res) => {
     }
 
     if (!token_ws) {
-        return res.redirect(`${frontendUrl.replace(/\/$/, "")}/checkout/failure`)
+        return res.redirect(buildFrontendRoute(frontendUrl, "/checkout/failure"))
     }
 
     try {
@@ -278,7 +280,7 @@ export const confirmTransaction = async (req, res) => {
         )
 
         if (orderResult.rows.length === 0) {
-            return res.redirect(`${frontendUrl.replace(/\/$/, "")}/checkout/failure`)
+            return res.redirect(buildFrontendRoute(frontendUrl, "/checkout/failure"))
         }
 
         const order = orderResult.rows[0]
@@ -328,9 +330,7 @@ export const confirmTransaction = async (req, res) => {
             )
             await addPointsForOrder(pool, order.user_id, orderId, productPointsTotal)
 
-            return res.redirect(
-                `${frontendUrl.replace(/\/$/, "")}/checkout/success?order_id=${orderId}`
-            )
+            return res.redirect(buildFrontendRoute(frontendUrl, `/checkout/success?order_id=${orderId}`))
         }
 
         const reservations = await pool.query(
@@ -371,7 +371,7 @@ export const confirmTransaction = async (req, res) => {
 
         await restoreUsedPointsForOrder(pool, order.user_id, orderId, "Devolucion por pago rechazado")
 
-        return res.redirect(`${frontendUrl.replace(/\/$/, "")}/checkout/failure`)
+        return res.redirect(buildFrontendRoute(frontendUrl, "/checkout/failure"))
 
     } catch (err) {
         console.error("Confirm error completo:", err)
@@ -379,6 +379,6 @@ export const confirmTransaction = async (req, res) => {
         console.error("Error response data:", err.response?.data)
         console.error("Error status:", err.response?.status)
 
-        return res.redirect(`${frontendUrl.replace(/\/$/, "")}/checkout/failure`)
+        return res.redirect(buildFrontendRoute(frontendUrl, "/checkout/failure"))
     }
 }
