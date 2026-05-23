@@ -27,7 +27,7 @@ const startServer = async () => {
             if (admin.passwordAlreadyChanged) {
                 console.log("El admin ya cambio su clave. No se regenera ni se vuelve a pedir cambio.")
             } else {
-                console.log("Admin pendiente de cambio de clave. Usa RESET_BOOTSTRAP_ADMIN_PASSWORD=true para regenerar solo esa clave temporal.")
+                console.log("Admin pendiente de cambio de clave. No se regenera automaticamente en deploys.")
             }
             console.log("Usa FORCE_RESET_BOOTSTRAP_ADMIN_PASSWORD=true solo si necesitas forzar un reinicio de clave.")
         }

@@ -55,9 +55,20 @@ export const updateUser = async (req, res) => {
 export const updateUserRole = async (req, res) => {
     const { id } = req.params
     const { role } = req.body
-    if (!["cliente", "vendedor", "bodeguero", "contador"].includes(role))
+    if (!["cliente", "maestro", "pyme", "vendedor", "bodeguero", "contador"].includes(role))
         return res.status(400).json({ message: "Rol inválido" })
     try {
+        const userType = ["cliente", "maestro", "pyme"].includes(role) ? role : null
+        if (userType) {
+            const result = await pool.query(
+                "UPDATE users SET role=$1, user_type=$2 WHERE id=$3 RETURNING id, name, email, role, user_type",
+                [role, userType, id]
+            )
+            if (result.rows.length === 0)
+                return res.status(404).json({ message: "Usuario no encontrado" })
+            return res.json(result.rows[0])
+        }
+
         const result = await pool.query(
             "UPDATE users SET role=$1 WHERE id=$2 RETURNING id, name, email, role",
             [role, id]

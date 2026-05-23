@@ -93,6 +93,7 @@ export const ensureCommerceTables = async () => {
             created_at TIMESTAMP DEFAULT NOW()
         )
     `)
+    await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_method VARCHAR(30) DEFAULT 'delivery'")
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS order_items (
@@ -102,6 +103,16 @@ export const ensureCommerceTables = async () => {
             quantity INTEGER NOT NULL DEFAULT 1,
             price NUMERIC(12, 2) NOT NULL DEFAULT 0,
             created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS favorite_products (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(user_id, product_id)
         )
     `)
 
@@ -148,8 +159,6 @@ export const bootstrapAdmin = async () => {
     const email = process.env.BOOTSTRAP_ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL
     const rut = process.env.BOOTSTRAP_ADMIN_RUT || DEFAULT_ADMIN_RUT
     const phone = process.env.BOOTSTRAP_ADMIN_PHONE || "+56900000000"
-    const temporaryPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD || generateTemporaryPassword()
-    const hashedPassword = await bcrypt.hash(temporaryPassword, 10)
 
     const existingAdmin = await pool.query(
         "SELECT id, email, must_change_password FROM users WHERE role='admin' ORDER BY id ASC LIMIT 1"
@@ -158,9 +167,10 @@ export const bootstrapAdmin = async () => {
     if (existingAdmin.rows.length > 0) {
         const admin = existingAdmin.rows[0]
         const forceReset = process.env.FORCE_RESET_BOOTSTRAP_ADMIN_PASSWORD === "true"
-        const resetPendingAdmin = process.env.RESET_BOOTSTRAP_ADMIN_PASSWORD === "true" && admin.must_change_password
 
-        if (forceReset || resetPendingAdmin) {
+        if (forceReset) {
+            const temporaryPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD || generateTemporaryPassword()
+            const hashedPassword = await bcrypt.hash(temporaryPassword, 10)
             await pool.query(
                 `UPDATE users
                  SET password=$1, must_change_password=TRUE
@@ -172,7 +182,7 @@ export const bootstrapAdmin = async () => {
                 reset: true,
                 email: admin.email,
                 temporaryPassword,
-                forced: forceReset,
+                forced: true,
             }
         }
 
@@ -181,8 +191,12 @@ export const bootstrapAdmin = async () => {
             reset: false,
             email: admin.email,
             passwordAlreadyChanged: !admin.must_change_password,
+            passwordChangePending: admin.must_change_password,
         }
     }
+
+    const temporaryPassword = process.env.BOOTSTRAP_ADMIN_PASSWORD || generateTemporaryPassword()
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 10)
 
     const existingRut = await pool.query("SELECT id FROM users WHERE rut=$1", [rut])
     const adminRut = existingRut.rows.length > 0 ? null : rut

@@ -14,7 +14,7 @@ export const setCredit = async (req, res) => {
     try {
         await client.query("BEGIN")
         const user = await client.query(
-            "SELECT id, user_type FROM users WHERE id = $1",
+            "SELECT id, role, user_type FROM users WHERE id = $1",
             [userId]
         )
         if (user.rows.length === 0) {
@@ -22,13 +22,17 @@ export const setCredit = async (req, res) => {
             return res.status(404).json({ message: "Usuario no encontrado" })
         }
         const currentType = user.rows[0].user_type
+        const currentRole = user.rows[0].role
         if (!["maestro", "pyme", "maestro_pending", "pyme_pending"].includes(currentType)) {
             await client.query("ROLLBACK")
             return res.status(400).json({ message: "El usuario no tiene una postulacion FerreCredito" })
         }
         const approvedType = currentType === "maestro_pending" ? "maestro" : currentType === "pyme_pending" ? "pyme" : currentType
-        if (approvedType !== currentType) {
-            await client.query("UPDATE users SET user_type=$1 WHERE id=$2", [approvedType, userId])
+        if (approvedType !== currentType || currentRole !== approvedType) {
+            await client.query(
+                "UPDATE users SET user_type=$1, role=$1 WHERE id=$2",
+                [approvedType, userId]
+            )
         }
         const exists = await client.query(
             "SELECT id, balance_used FROM ferre_credits WHERE user_id = $1",
@@ -81,7 +85,7 @@ export const rejectCreditApplication = async (req, res) => {
             return res.status(400).json({ message: "El usuario no tiene una postulacion pendiente" })
         }
 
-        await client.query("UPDATE users SET user_type='cliente' WHERE id=$1", [userId])
+        await client.query("UPDATE users SET user_type='cliente', role='cliente' WHERE id=$1", [userId])
         await client.query(
             `UPDATE ferre_credits
              SET is_active=false, updated_at=NOW()
@@ -141,13 +145,14 @@ export const getAllInstallments = async (req, res) => {
 }
 
 export const payWithCredit = async (req, res) => {
-    const { installments, address, points_to_use = 0 } = req.body
+    const { installments, address, points_to_use = 0, delivery_method = "delivery" } = req.body
     const client = await pool.connect()
     try {
         await releaseExpiredReservations()
         await ensurePointsTables()
         await ensureServiceTables()
         await client.query("BEGIN")
+        const deliveryMethod = delivery_method === "pickup" ? "pickup" : "delivery"
 
         const userResult = await client.query(
             "SELECT * FROM users WHERE id = $1",
@@ -201,9 +206,10 @@ export const payWithCredit = async (req, res) => {
             return res.status(400).json({ message: "El carrito está vacío" })
         }
 
-        let total = cartItems.rows.reduce(
+        const productSubtotal = cartItems.rows.reduce(
             (acc, item) => acc + Number(item.price) * item.quantity, 0
         )
+        let total = productSubtotal
         total += serviceTotal
 
         let discountApplied = false
@@ -213,13 +219,13 @@ export const payWithCredit = async (req, res) => {
         }
 
         const discountedProductTotal = !user.first_purchase_used ? productSubtotal * 0.7 : productSubtotal
-        const shipping = discountedProductTotal > 0 && discountedProductTotal < 50000 ? 4990 : 0
+        const shipping = deliveryMethod === "delivery" && discountedProductTotal > 0 && discountedProductTotal < 50000 ? 4990 : 0
         const beforePointsTotal = Math.round(total + shipping)
 
         const orderResult = await client.query(
-            `INSERT INTO orders (user_id, total, status, address)
-       VALUES ($1, $2, 'paid', $3) RETURNING *`,
-            [req.user.id, beforePointsTotal, JSON.stringify(address)]
+            `INSERT INTO orders (user_id, total, status, address, delivery_method)
+       VALUES ($1, $2, 'paid', $3, $4) RETURNING *`,
+            [req.user.id, beforePointsTotal, JSON.stringify(address), deliveryMethod]
         )
         const order = orderResult.rows[0]
         const pointsUsed = await usePointsForOrder(client, req.user.id, order.id, points_to_use, beforePointsTotal)

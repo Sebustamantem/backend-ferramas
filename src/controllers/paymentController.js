@@ -20,7 +20,7 @@ const tx = new WebpayPlus.Transaction(
 )
 
 export const createTransaction = async (req, res) => {
-    const { address, points_to_use = 0 } = req.body
+    const { address, points_to_use = 0, delivery_method = "delivery" } = req.body
     let createdOrderId = null
     let deductedPoints = 0
 
@@ -28,6 +28,7 @@ export const createTransaction = async (req, res) => {
         await releaseExpiredReservations()
         await ensurePointsTables()
         await ensureServiceTables()
+        const deliveryMethod = delivery_method === "pickup" ? "pickup" : "delivery"
         const backendUrl = process.env.BACKEND_URL
 
         if (!backendUrl) {
@@ -62,14 +63,14 @@ export const createTransaction = async (req, res) => {
         )
         const total = productTotal + serviceTotal
 
-        const shipping = productTotal > 0 && productTotal < 50000 ? 4990 : 0
+        const shipping = deliveryMethod === "delivery" && productTotal > 0 && productTotal < 50000 ? 4990 : 0
         const beforePointsTotal = Math.round(total + shipping)
 
         const orderResult = await pool.query(
-            `INSERT INTO orders (user_id, total, status, address)
-             VALUES ($1, $2, 'pending', $3)
+            `INSERT INTO orders (user_id, total, status, address, delivery_method)
+             VALUES ($1, $2, 'pending', $3, $4)
              RETURNING *`,
-            [req.user.id, beforePointsTotal, JSON.stringify(address)]
+            [req.user.id, beforePointsTotal, JSON.stringify(address), deliveryMethod]
         )
 
         const order = orderResult.rows[0]
@@ -152,7 +153,7 @@ export const createTransaction = async (req, res) => {
 }
 
 export const createTransferOrder = async (req, res) => {
-    const { address, points_to_use = 0 } = req.body
+    const { address, points_to_use = 0, delivery_method = "delivery" } = req.body
     const client = await pool.connect()
 
     try {
@@ -160,6 +161,7 @@ export const createTransferOrder = async (req, res) => {
         await ensurePointsTables()
         await ensureServiceTables()
         await client.query("BEGIN")
+        const deliveryMethod = delivery_method === "pickup" ? "pickup" : "delivery"
 
         const cartItems = await client.query(
             `SELECT ci.product_id, ci.quantity, p.price, p.name
@@ -182,14 +184,14 @@ export const createTransferOrder = async (req, res) => {
             0
         )
         const subtotal = productSubtotal + serviceTotal
-        const shipping = productSubtotal > 0 && productSubtotal < 50000 ? 4990 : 0
+        const shipping = deliveryMethod === "delivery" && productSubtotal > 0 && productSubtotal < 50000 ? 4990 : 0
         const beforePointsTotal = Math.round(subtotal + shipping)
 
         const orderResult = await client.query(
-            `INSERT INTO orders (user_id, total, status, address)
-             VALUES ($1, $2, 'transfer_pending', $3)
+            `INSERT INTO orders (user_id, total, status, address, delivery_method)
+             VALUES ($1, $2, 'transfer_pending', $3, $4)
              RETURNING *`,
-            [req.user.id, beforePointsTotal, JSON.stringify(address)]
+            [req.user.id, beforePointsTotal, JSON.stringify(address), deliveryMethod]
         )
         const order = orderResult.rows[0]
         const pointsUsed = await usePointsForOrder(client, req.user.id, order.id, points_to_use, beforePointsTotal)

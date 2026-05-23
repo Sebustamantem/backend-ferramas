@@ -1,5 +1,17 @@
 import pool from "../config/db.js"
 
+const ensureFavoriteTable = async () => {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS favorite_products (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(user_id, product_id)
+        )
+    `)
+}
+
 export const getProducts = async (req, res) => {
     try {
         const result = await pool.query("SELECT * FROM products ORDER BY created_at DESC")
@@ -67,5 +79,50 @@ export const deleteProduct = async (req, res) => {
         res.json({ message: "Producto eliminado correctamente" })
     } catch (err) {
         res.status(500).json({ message: "Error al eliminar producto", error: err.message })
+    }
+}
+
+export const getMyFavoriteProducts = async (req, res) => {
+    try {
+        await ensureFavoriteTable()
+        const result = await pool.query(
+            `SELECT p.*, fp.created_at as favorite_created_at
+             FROM favorite_products fp
+             JOIN products p ON fp.product_id = p.id
+             WHERE fp.user_id=$1
+             ORDER BY fp.created_at DESC`,
+            [req.user.id]
+        )
+        res.json(result.rows)
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener favoritos", error: err.message })
+    }
+}
+
+export const toggleFavoriteProduct = async (req, res) => {
+    const { id } = req.params
+    try {
+        await ensureFavoriteTable()
+        const product = await pool.query("SELECT id FROM products WHERE id=$1", [id])
+        if (product.rows.length === 0) {
+            return res.status(404).json({ message: "Producto no encontrado" })
+        }
+
+        const existing = await pool.query(
+            "SELECT id FROM favorite_products WHERE user_id=$1 AND product_id=$2",
+            [req.user.id, id]
+        )
+        if (existing.rows.length > 0) {
+            await pool.query("DELETE FROM favorite_products WHERE id=$1", [existing.rows[0].id])
+            return res.json({ is_favorite: false })
+        }
+
+        await pool.query(
+            "INSERT INTO favorite_products (user_id, product_id) VALUES ($1, $2)",
+            [req.user.id, id]
+        )
+        res.status(201).json({ is_favorite: true })
+    } catch (err) {
+        res.status(500).json({ message: "Error al actualizar favorito", error: err.message })
     }
 }
