@@ -19,7 +19,7 @@ const tx = new WebpayPlus.Transaction(
     )
 )
 
-const buildFrontendRoute = (frontendUrl, path) => `${frontendUrl.replace(/\/$/, "")}/#${path}`
+const buildFrontendRoute = (frontendUrl, path) => `${frontendUrl.replace(/\/$/, "")}${path}`
 
 export const createTransaction = async (req, res) => {
     const { address, points_to_use = 0, delivery_method = "delivery" } = req.body
