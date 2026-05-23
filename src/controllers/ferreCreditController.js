@@ -63,10 +63,16 @@ export const setCredit = async (req, res) => {
             )
         }
         await client.query("COMMIT")
-        client.release()
         res.json(result.rows[0])
     } catch (err) {
+        try {
+            await client.query("ROLLBACK")
+        } catch (rollbackErr) {
+            console.error("Error al revertir FerreCredito:", rollbackErr.message)
+        }
         res.status(500).json({ message: "Error al configurar crédito", error: err.message })
+    } finally {
+        client.release()
     }
 }
 
@@ -101,7 +107,11 @@ export const rejectCreditApplication = async (req, res) => {
         await client.query("COMMIT")
         res.json({ message: "Postulacion rechazada" })
     } catch (err) {
-        await client.query("ROLLBACK")
+        try {
+            await client.query("ROLLBACK")
+        } catch (rollbackErr) {
+            console.error("Error al revertir FerreCredito:", rollbackErr.message)
+        }
         res.status(500).json({ message: "Error al rechazar postulacion", error: err.message })
     } finally {
         client.release()

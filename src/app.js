@@ -14,7 +14,29 @@ import staffRoutes from "./routes/staffRoutes.js"
 
 const app = express()
 
-app.use(cors({ origin: "*" }))
+const allowedOrigins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://frontend-ferremas.onrender.com",
+]
+
+app.use((req, res, next) => {
+    const origin = req.headers.origin
+    const allowedOrigin = allowedOrigins.includes(origin) ? origin : "*"
+
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigin)
+    res.setHeader("Vary", "Origin")
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+    if (req.method === "OPTIONS") {
+        return res.sendStatus(204)
+    }
+
+    next()
+})
+
+app.use(cors({ origin: allowedOrigins, credentials: false }))
 app.use(express.json())
 
 app.get("/", (req, res) => {
@@ -32,5 +54,13 @@ app.use("/api/points", pointsRoutes)
 app.use("/api/services", serviceRoutes)
 app.use("/api/surveys", surveyRoutes)
 app.use("/api/staff", staffRoutes)
+
+app.use((err, req, res, next) => {
+    console.error("Unhandled API error:", err)
+    res.status(err.status || 500).json({
+        message: "Error interno del servidor",
+        error: err.message,
+    })
+})
 
 export default app
