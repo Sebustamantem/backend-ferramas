@@ -275,7 +275,7 @@ export const payWithCredit = async (req, res) => {
                 [order.id, item.product_id, item.quantity, item.price]
             )
         }
-        await createServiceRequestsForOrder(client, req.user.id, order.id, "paid_contact_fee")
+        await createServiceRequestsForOrder(client, req.user.id, order.id, "paid_contact_fee", false)
         orderIdToNotify = order.id
 
         const amountPerInstallment = Math.round(finalTotal / installments)
@@ -301,7 +301,7 @@ export const payWithCredit = async (req, res) => {
 
         await client.query("DELETE FROM cart_items WHERE user_id = $1", [req.user.id])
         await client.query("DELETE FROM stock_reservations WHERE user_id = $1", [req.user.id])
-        await clearServiceCart(client, req.user.id)
+        await clearServiceCart(client, req.user.id, false)
         const pointsEarned = await addPointsForOrder(client, req.user.id, order.id, discountedProductTotal)
 
         await client.query("COMMIT")

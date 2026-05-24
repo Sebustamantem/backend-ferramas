@@ -304,8 +304,10 @@ export const removeServiceFromCart = async (req, res) => {
     }
 }
 
-export const createServiceRequestsForOrder = async (client, userId, orderId, status = "pending_payment") => {
-    await ensureServiceTables()
+export const createServiceRequestsForOrder = async (client, userId, orderId, status = "pending_payment", ensureTables = true) => {
+    if (ensureTables) {
+        await ensureServiceTables()
+    }
     const customerResult = await client.query(
         "SELECT name, lastname, email, phone FROM users WHERE id=$1",
         [userId]
@@ -345,8 +347,10 @@ export const createServiceRequestsForOrder = async (client, userId, orderId, sta
     return services.rows.length
 }
 
-export const markServiceRequestsPaid = async (client, orderId) => {
-    await ensureServiceTables()
+export const markServiceRequestsPaid = async (client, orderId, ensureTables = true) => {
+    if (ensureTables) {
+        await ensureServiceTables()
+    }
     const result = await client.query(
         `UPDATE service_requests
          SET status='paid_contact_fee'
@@ -364,15 +368,19 @@ export const markServiceRequestsPaid = async (client, orderId) => {
     return result.rows
 }
 
-export const cancelServiceRequestsForOrder = async (client, orderId) => {
-    await ensureServiceTables()
+export const cancelServiceRequestsForOrder = async (client, orderId, ensureTables = true) => {
+    if (ensureTables) {
+        await ensureServiceTables()
+    }
     await client.query(
         "UPDATE service_requests SET status='cancelled' WHERE order_id=$1",
         [orderId]
     )
 }
 
-export const clearServiceCart = async (client, userId) => {
-    await ensureServiceTables()
+export const clearServiceCart = async (client, userId, ensureTables = true) => {
+    if (ensureTables) {
+        await ensureServiceTables()
+    }
     await client.query("DELETE FROM service_cart_items WHERE user_id=$1", [userId])
 }

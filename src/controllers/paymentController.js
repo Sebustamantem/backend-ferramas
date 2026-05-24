@@ -227,11 +227,11 @@ export const createTransferOrder = async (req, res) => {
                 )
             }
         }
-        await createServiceRequestsForOrder(client, req.user.id, order.id, "pending_payment")
+        await createServiceRequestsForOrder(client, req.user.id, order.id, "pending_payment", false)
 
         await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.user.id])
         await client.query(`DELETE FROM stock_reservations WHERE user_id = $1`, [req.user.id])
-        await clearServiceCart(client, req.user.id)
+        await clearServiceCart(client, req.user.id, false)
         await client.query("COMMIT")
 
         return res.status(201).json({
