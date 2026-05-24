@@ -163,6 +163,8 @@ export const getAllInstallments = async (req, res) => {
 export const payWithCredit = async (req, res) => {
     const { installments, address, points_to_use = 0, delivery_method = "delivery" } = req.body
     const client = await pool.connect()
+    let transactionFinished = false
+    let orderIdToNotify = null
     try {
         await releaseExpiredReservations()
         await ensurePointsTables()
@@ -274,7 +276,7 @@ export const payWithCredit = async (req, res) => {
             )
         }
         await createServiceRequestsForOrder(client, req.user.id, order.id, "paid_contact_fee")
-        await markServiceRequestsPaid(client, order.id)
+        orderIdToNotify = order.id
 
         const amountPerInstallment = Math.round(finalTotal / installments)
         await client.query(
@@ -303,6 +305,15 @@ export const payWithCredit = async (req, res) => {
         const pointsEarned = await addPointsForOrder(client, req.user.id, order.id, discountedProductTotal)
 
         await client.query("COMMIT")
+        transactionFinished = true
+
+        if (orderIdToNotify) {
+            try {
+                await markServiceRequestsPaid(pool, orderIdToNotify)
+            } catch (notifyErr) {
+                console.error("Error al notificar servicios pagados:", notifyErr.message)
+            }
+        }
 
         res.json({
             message: "Compra realizada con FerreCredito",
@@ -315,7 +326,13 @@ export const payWithCredit = async (req, res) => {
             points_earned: pointsEarned
         })
     } catch (err) {
-        await client.query("ROLLBACK")
+        if (!transactionFinished) {
+            try {
+                await client.query("ROLLBACK")
+            } catch (rollbackErr) {
+                console.error("Error al revertir pago FerreCredito:", rollbackErr.message)
+            }
+        }
         res.status(500).json({ message: "Error al procesar pago", error: err.message })
     } finally {
         client.release()
