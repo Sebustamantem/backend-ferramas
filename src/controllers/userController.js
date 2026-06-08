@@ -140,7 +140,7 @@ export const createStaffUser = async (req, res) => {
         res.status(201).json({
             user: result.rows[0],
             temporary_password: temporaryPassword,
-            message: "Usuario interno creado. Debe cambiar la contrasena al iniciar sesion.",
+            message: "Usuario interno creado. Debe cambiar la contraseña al iniciar sesion.",
         })
     } catch (err) {
         res.status(500).json({ message: "Error al crear usuario interno", error: err.message })

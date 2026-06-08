@@ -141,6 +141,7 @@ export const ensureCommerceTables = async () => {
             created_at TIMESTAMP DEFAULT NOW()
         )
     `)
+    await pool.query("ALTER TABLE ferre_credit_installments ADD COLUMN IF NOT EXISTS due_date TIMESTAMP")
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS ferre_credit_payments (

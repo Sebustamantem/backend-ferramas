@@ -2,6 +2,7 @@ import pool from "../config/db.js"
 import { releaseExpiredReservations } from "./cartController.js"
 import { addPointsForOrder, ensurePointsTables, usePointsForOrder } from "./pointsController.js"
 import { clearServiceCart, createServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
+import { logActivity } from "../utils/activityLog.js"
 
 const getApprovedProfessionalType = (userType) => {
     if (userType === "maestro_pending") return "maestro"
@@ -63,6 +64,14 @@ export const setCredit = async (req, res) => {
             )
         }
         await client.query("COMMIT")
+        await logActivity({
+            userId: req.user.id,
+            action: "ferrecredit_approved",
+            entityType: "user",
+            entityId: Number(userId),
+            description: "Admin aprobo o actualizo FerreCredito",
+            metadata: { credit_limit: limit, is_active },
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json(result.rows[0])
     } catch (err) {
         try {
@@ -105,6 +114,13 @@ export const rejectCreditApplication = async (req, res) => {
             [userId]
         )
         await client.query("COMMIT")
+        await logActivity({
+            userId: req.user.id,
+            action: "ferrecredit_rejected",
+            entityType: "user",
+            entityId: Number(userId),
+            description: "Admin rechazo postulacion FerreCredito",
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json({ message: "Postulacion rechazada" })
     } catch (err) {
         try {
@@ -149,7 +165,15 @@ export const getAllCredits = async (req, res) => {
 export const getAllInstallments = async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT fci.*, u.name as user_name, u.email as user_email
+            `SELECT fci.*, u.name as user_name, u.email as user_email,
+                    CASE
+                        WHEN fci.status='active'
+                         AND fci.due_date IS NOT NULL
+                         AND fci.due_date < NOW()
+                         AND fci.paid_installments < fci.installments
+                        THEN 'overdue'
+                        ELSE fci.status
+                    END as effective_status
        FROM ferre_credit_installments fci
        JOIN users u ON fci.user_id = u.id
        ORDER BY fci.created_at DESC`
@@ -204,19 +228,6 @@ export const payWithCredit = async (req, res) => {
 
         const available = Number(credit.credit_limit) - Number(credit.balance_used)
 
-        const pendingInstallments = await client.query(
-            `SELECT * FROM ferre_credit_installments
-       WHERE user_id = $1 AND status = 'active' AND paid_installments < installments`,
-            [req.user.id]
-        )
-
-        if (pendingInstallments.rows.length > 0) {
-            await client.query("ROLLBACK")
-            return res.status(400).json({
-                message: "Debes estar al día en tus cuotas para realizar una nueva compra"
-            })
-        }
-
         const cartItems = await client.query(
             `SELECT ci.product_id, ci.quantity, p.price, p.name
        FROM cart_items ci
@@ -264,7 +275,7 @@ export const payWithCredit = async (req, res) => {
         if (available < finalTotal) {
             await client.query("ROLLBACK")
             return res.status(400).json({
-                message: `Crédito insuficiente. Disponible: $${available.toLocaleString("es-CL")}`
+                message: `No tienes cupo suficiente en FerreCredito. Disponible: $${available.toLocaleString("es-CL")}`
             })
         }
 
@@ -281,8 +292,8 @@ export const payWithCredit = async (req, res) => {
         const amountPerInstallment = Math.round(finalTotal / installments)
         await client.query(
             `INSERT INTO ferre_credit_installments
-       (user_id, order_id, total_amount, installments, amount_per_installment)
-       VALUES ($1, $2, $3, $4, $5)`,
+       (user_id, order_id, total_amount, installments, amount_per_installment, due_date)
+       VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '30 days')`,
             [req.user.id, order.id, finalTotal, installments, amountPerInstallment]
         )
 
@@ -342,7 +353,15 @@ export const payWithCredit = async (req, res) => {
 export const getMyInstallments = async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT fci.*, o.total as order_total, o.created_at as order_date
+            `SELECT fci.*, o.total as order_total, o.created_at as order_date,
+                    CASE
+                        WHEN fci.status='active'
+                         AND fci.due_date IS NOT NULL
+                         AND fci.due_date < NOW()
+                         AND fci.paid_installments < fci.installments
+                        THEN 'overdue'
+                        ELSE fci.status
+                    END as effective_status
        FROM ferre_credit_installments fci
        JOIN orders o ON fci.order_id = o.id
        WHERE fci.user_id = $1
@@ -389,7 +408,12 @@ export const payInstallment = async (req, res) => {
         const newStatus = newPaid >= inst.installments ? "completed" : "active"
         await client.query(
             `UPDATE ferre_credit_installments
-       SET paid_installments = $1, status = $2
+       SET paid_installments = $1,
+           status = $2,
+           due_date = CASE
+                WHEN $2 = 'completed' THEN due_date
+                ELSE COALESCE(due_date, NOW()) + INTERVAL '30 days'
+           END
        WHERE id = $3`,
             [newPaid, newStatus, installmentId]
         )
@@ -401,6 +425,14 @@ export const payInstallment = async (req, res) => {
         )
 
         await client.query("COMMIT")
+        await logActivity({
+            userId: req.user.id,
+            action: "ferrecredit_installment_paid",
+            entityType: "ferre_credit_installment",
+            entityId: Number(installmentId),
+            description: "Admin registro pago de cuota FerreCredito",
+            metadata: { amount: paymentAmount, paid_installments: newPaid },
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json({ message: "Cuota pagada correctamente" })
     } catch (err) {
         await client.query("ROLLBACK")

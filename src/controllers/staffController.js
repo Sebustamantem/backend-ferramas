@@ -3,21 +3,51 @@ import { ensureCommerceTables } from "../config/bootstrapAdmin.js"
 import { addPointsForOrder, restoreUsedPointsForOrder } from "./pointsController.js"
 import { cancelServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
 import { ensureSurveyTable } from "./surveyController.js"
+import { ensureActivityLogTable, getActivityLogs, getRecentActivityLogs, logActivity } from "../utils/activityLog.js"
+
+const ensureStockReportsTable = async () => {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS stock_reports (
+            id SERIAL PRIMARY KEY,
+            product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+            reported_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            current_stock INTEGER NOT NULL DEFAULT 0,
+            reason TEXT NOT NULL DEFAULT '',
+            status VARCHAR(30) NOT NULL DEFAULT 'pending',
+            resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            resolved_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+}
 
 export const getAdminDashboard = async (req, res) => {
     try {
         await ensureCommerceTables()
         await ensureSurveyTable()
         await ensureServiceTables()
+        await ensureStockReportsTable()
+        await ensureActivityLogTable()
 
         const [
             salesToday,
             pendingOrders,
+            transferPending,
+            outOfStock,
+            pendingStockReports,
+            pendingCreditApplications,
             newUsers,
             services,
             surveySummary,
             recentSurveys,
             recentOrders,
+            recentActivity,
+            salesLast7Days,
+            ordersByStatus,
+            topProducts,
+            agedTransferPending,
+            agedPaidOrders,
+            overdueInstallments,
         ] = await Promise.all([
             pool.query(
                 `SELECT COALESCE(SUM(total), 0) as total, COUNT(*)::int as count
@@ -29,6 +59,14 @@ export const getAdminDashboard = async (req, res) => {
                 `SELECT COUNT(*)::int as count
                  FROM orders
                  WHERE status IN ('pending', 'transfer_pending', 'paid')`
+            ),
+            pool.query("SELECT COUNT(*)::int as count FROM orders WHERE status='transfer_pending'"),
+            pool.query("SELECT COUNT(*)::int as count FROM products WHERE stock <= 0"),
+            pool.query("SELECT COUNT(*)::int as count FROM stock_reports WHERE status='pending'"),
+            pool.query(
+                `SELECT COUNT(*)::int as count
+                 FROM users
+                 WHERE user_type IN ('maestro_pending', 'pyme_pending')`
             ),
             pool.query(
                 `SELECT COUNT(*)::int as count
@@ -63,6 +101,54 @@ export const getAdminDashboard = async (req, res) => {
                  ORDER BY o.created_at DESC
                  LIMIT 6`
             ),
+            getRecentActivityLogs(10),
+            pool.query(
+                `SELECT day::date,
+                        COALESCE(SUM(o.total), 0) as total,
+                        COUNT(o.id)::int as count
+                 FROM generate_series(CURRENT_DATE - INTERVAL '6 days', CURRENT_DATE, INTERVAL '1 day') day
+                 LEFT JOIN orders o
+                   ON o.created_at::date = day::date
+                  AND o.status IN ('paid', 'processing', 'shipped', 'delivered')
+                 GROUP BY day
+                 ORDER BY day ASC`
+            ),
+            pool.query(
+                `SELECT status, COUNT(*)::int as count
+                 FROM orders
+                 GROUP BY status
+                 ORDER BY count DESC`
+            ),
+            pool.query(
+                `SELECT p.id, p.name, COALESCE(SUM(oi.quantity), 0)::int as quantity,
+                        COALESCE(SUM(oi.quantity * oi.price), 0) as total
+                 FROM order_items oi
+                 LEFT JOIN products p ON p.id = oi.product_id
+                 GROUP BY p.id, p.name
+                 ORDER BY quantity DESC, total DESC
+                 LIMIT 8`
+            ),
+            pool.query(
+                `SELECT COUNT(*)::int as count
+                 FROM orders
+                 WHERE status='transfer_pending'
+                   AND created_at < NOW() - INTERVAL '24 hours'`
+            ),
+            pool.query(
+                `SELECT COUNT(*)::int as count
+                 FROM orders
+                 WHERE status='paid'
+                   AND created_at < NOW() - INTERVAL '24 hours'`
+            ),
+            pool.query(
+                `SELECT COUNT(*)::int as count
+                 FROM ferre_credit_installments
+                 WHERE paid_installments < installments
+                   AND (
+                    status IN ('overdue', 'late', 'delinquent')
+                    OR (status='active' AND due_date IS NOT NULL AND due_date < NOW())
+                   )`
+            ),
         ])
 
         res.json({
@@ -71,6 +157,10 @@ export const getAdminDashboard = async (req, res) => {
                 count: Number(salesToday.rows[0]?.count || 0),
             },
             pending_orders: Number(pendingOrders.rows[0]?.count || 0),
+            transfer_pending: Number(transferPending.rows[0]?.count || 0),
+            out_of_stock: Number(outOfStock.rows[0]?.count || 0),
+            pending_stock_reports: Number(pendingStockReports.rows[0]?.count || 0),
+            pending_credit_applications: Number(pendingCreditApplications.rows[0]?.count || 0),
             new_users_7d: Number(newUsers.rows[0]?.count || 0),
             services: {
                 total: Number(services.rows[0]?.total || 0),
@@ -82,9 +172,125 @@ export const getAdminDashboard = async (req, res) => {
                 comments: recentSurveys.rows,
             },
             recent_orders: recentOrders.rows,
+            recent_activity: recentActivity,
+            charts: {
+                sales_last_7_days: salesLast7Days.rows.map((row) => ({
+                    date: row.day,
+                    total: Number(row.total || 0),
+                    count: Number(row.count || 0),
+                })),
+                orders_by_status: ordersByStatus.rows.map((row) => ({
+                    status: row.status,
+                    count: Number(row.count || 0),
+                })),
+                top_products: topProducts.rows.map((row) => ({
+                    id: row.id,
+                    name: row.name || "Producto eliminado",
+                    quantity: Number(row.quantity || 0),
+                    total: Number(row.total || 0),
+                })),
+            },
+            alerts: {
+                aged_transfer_pending: Number(agedTransferPending.rows[0]?.count || 0),
+                aged_paid_orders: Number(agedPaidOrders.rows[0]?.count || 0),
+                overdue_installments: Number(overdueInstallments.rows[0]?.count || 0),
+            },
         })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener dashboard admin", error: err.message })
+    }
+}
+
+export const getAdminActivity = async (req, res) => {
+    try {
+        const logs = await getActivityLogs({
+            action: req.query.action || "",
+            entityType: req.query.entity_type || "",
+            userId: req.query.user_id || "",
+            dateFrom: req.query.date_from || "",
+            dateTo: req.query.date_to || "",
+            limit: req.query.limit || 120,
+        })
+        res.json(logs)
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener historial", error: err.message })
+    }
+}
+
+export const getAdminNotifications = async (req, res) => {
+    try {
+        await ensureCommerceTables()
+        await ensureStockReportsTable()
+
+        const [stockReports, creditApplications, pendingOrders, stockReportCount, creditApplicationCount, pendingOrderCount, transferPending, outOfStock] = await Promise.all([
+            pool.query(
+                `SELECT sr.id, sr.product_id, sr.reason, sr.created_at, p.name as product_name
+                 FROM stock_reports sr
+                 JOIN products p ON p.id = sr.product_id
+                 WHERE sr.status='pending'
+                 ORDER BY sr.created_at DESC
+                 LIMIT 8`
+            ),
+            pool.query(
+                `SELECT id, name, lastname, email, user_type, created_at
+                 FROM users
+                 WHERE user_type IN ('maestro_pending', 'pyme_pending')
+                 ORDER BY created_at DESC
+                 LIMIT 8`
+            ),
+            pool.query(
+                `SELECT id, total, status, created_at
+                 FROM orders
+                 WHERE status IN ('pending', 'paid')
+                 ORDER BY created_at DESC
+                 LIMIT 8`
+            ),
+            pool.query("SELECT COUNT(*)::int as count FROM stock_reports WHERE status='pending'"),
+            pool.query("SELECT COUNT(*)::int as count FROM users WHERE user_type IN ('maestro_pending', 'pyme_pending')"),
+            pool.query("SELECT COUNT(*)::int as count FROM orders WHERE status IN ('pending', 'paid')"),
+            pool.query("SELECT COUNT(*)::int as count FROM orders WHERE status='transfer_pending'"),
+            pool.query("SELECT COUNT(*)::int as count FROM products WHERE stock <= 0"),
+        ])
+
+        const items = [
+            ...stockReports.rows.map((report) => ({
+                type: "stock_report",
+                label: "Reporte de bodega",
+                text: report.product_name,
+                target: "/admin/products",
+                created_at: report.created_at,
+            })),
+            ...creditApplications.rows.map((application) => ({
+                type: "credit_application",
+                label: "Postulacion FerreCredito",
+                text: `${application.name || ""} ${application.lastname || ""}`.trim() || application.email,
+                target: "/admin/credits",
+                created_at: application.created_at,
+            })),
+            ...pendingOrders.rows.map((order) => ({
+                type: "pending_order",
+                label: "Pedido pendiente",
+                text: `Pedido #${order.id}`,
+                target: "/admin/dashboard",
+                created_at: order.created_at,
+            })),
+        ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 12)
+
+        const counts = {
+            stock_reports: Number(stockReportCount.rows[0]?.count || 0),
+            credit_applications: Number(creditApplicationCount.rows[0]?.count || 0),
+            pending_orders: Number(pendingOrderCount.rows[0]?.count || 0),
+            transfer_pending: Number(transferPending.rows[0]?.count || 0),
+            out_of_stock: Number(outOfStock.rows[0]?.count || 0),
+        }
+
+        res.json({
+            counts,
+            total: Object.values(counts).reduce((acc, value) => acc + Number(value || 0), 0),
+            items,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener notificaciones", error: err.message })
     }
 }
 
@@ -160,6 +366,95 @@ export const getInventory = async (req, res) => {
     }
 }
 
+export const reportStockIssue = async (req, res) => {
+    const { id } = req.params
+    const { reason = "Producto no disponible" } = req.body
+
+    try {
+        await ensureStockReportsTable()
+        const product = await pool.query("SELECT id, stock FROM products WHERE id=$1", [id])
+        if (product.rows.length === 0) {
+            return res.status(404).json({ message: "Producto no encontrado" })
+        }
+        if (Number(product.rows[0].stock || 0) > 0) {
+            return res.status(400).json({ message: "Solo se puede informar al admin productos sin stock" })
+        }
+
+        const existing = await pool.query(
+            `SELECT id
+             FROM stock_reports
+             WHERE product_id=$1 AND status='pending'
+             LIMIT 1`,
+            [id]
+        )
+        if (existing.rows.length > 0) {
+            return res.status(409).json({ message: "Este producto ya tiene un aviso pendiente para admin" })
+        }
+
+        const result = await pool.query(
+            `INSERT INTO stock_reports (product_id, reported_by, current_stock, reason)
+             VALUES ($1, $2, $3, $4)
+             RETURNING *`,
+            [id, req.user.id, Number(product.rows[0].stock || 0), reason.trim() || "Producto no disponible"]
+        )
+        await logActivity({
+            userId: req.user.id,
+            action: "stock_reported",
+            entityType: "product",
+            entityId: Number(id),
+            description: "Bodega informo producto sin stock",
+            metadata: { reason: reason.trim() || "Producto no disponible" },
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        res.status(201).json(result.rows[0])
+    } catch (err) {
+        res.status(500).json({ message: "Error al informar stock", error: err.message })
+    }
+}
+
+export const getStockReports = async (req, res) => {
+    try {
+        await ensureStockReportsTable()
+        const result = await pool.query(
+            `SELECT sr.*, p.name as product_name, p.category, p.price, p.stock,
+                    u.name as reporter_name, u.lastname as reporter_lastname, u.email as reporter_email
+             FROM stock_reports sr
+             JOIN products p ON p.id = sr.product_id
+             LEFT JOIN users u ON u.id = sr.reported_by
+             ORDER BY sr.status='pending' DESC, sr.created_at DESC`
+        )
+        res.json(result.rows)
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener avisos de stock", error: err.message })
+    }
+}
+
+export const resolveStockReport = async (req, res) => {
+    const { id } = req.params
+    try {
+        await ensureStockReportsTable()
+        const result = await pool.query(
+            `UPDATE stock_reports
+             SET status='resolved', resolved_by=$1, resolved_at=NOW()
+             WHERE id=$2
+             RETURNING *`,
+            [req.user.id, id]
+        )
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Aviso no encontrado" })
+        }
+        await logActivity({
+            userId: req.user.id,
+            action: "stock_report_resolved",
+            entityType: "stock_report",
+            entityId: Number(id),
+            description: "Admin marco un reporte de bodega como resuelto",
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        res.json(result.rows[0])
+    } catch (err) {
+        res.status(500).json({ message: "Error al resolver aviso", error: err.message })
+    }
+}
+
 export const updateStock = async (req, res) => {
     const { id } = req.params
     const { stock, reason } = req.body
@@ -170,6 +465,14 @@ export const updateStock = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Producto no encontrado" })
+        await logActivity({
+            userId: req.user.id,
+            action: "stock_updated",
+            entityType: "product",
+            entityId: Number(id),
+            description: reason || "Admin actualizo stock",
+            metadata: { stock: Number(stock) },
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar stock", error: err.message })
@@ -238,6 +541,14 @@ export const updateWarehouseOrderStatus = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(400).json({ message: "No se puede aplicar ese cambio de estado" })
+        await logActivity({
+            userId: req.user.id,
+            action: "warehouse_order_status_updated",
+            entityType: "order",
+            entityId: Number(id),
+            description: `Bodega cambio pedido a ${status}`,
+            metadata: { status },
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar estado del pedido", error: err.message })
@@ -289,6 +600,13 @@ export const confirmTransferOrder = async (req, res) => {
             [result.rows[0].id]
         )
         await addPointsForOrder(pool, result.rows[0].user_id, result.rows[0].id, productTotal.rows[0].total)
+        await logActivity({
+            userId: req.user.id,
+            action: "transfer_confirmed",
+            entityType: "order",
+            entityId: Number(id),
+            description: "Contador confirmo transferencia",
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al confirmar transferencia", error: err.message })
@@ -335,6 +653,13 @@ export const rejectTransferOrder = async (req, res) => {
             "Devolucion por transferencia rechazada"
         )
         await client.query("COMMIT")
+        await logActivity({
+            userId: req.user.id,
+            action: "transfer_rejected",
+            entityType: "order",
+            entityId: Number(id),
+            description: "Contador rechazo transferencia",
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json(result.rows[0])
     } catch (err) {
         await client.query("ROLLBACK")
@@ -356,6 +681,13 @@ export const registerDeliveredOrder = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(400).json({ message: "Solo se puede entregar un pedido despachado" })
+        await logActivity({
+            userId: req.user.id,
+            action: "order_delivered",
+            entityType: "order",
+            entityId: Number(id),
+            description: "Contador registro pedido entregado",
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al registrar entrega", error: err.message })

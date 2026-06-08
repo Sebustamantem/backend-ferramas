@@ -1,5 +1,6 @@
 import pool from "../config/db.js"
 import { ensureSurveyTable } from "./surveyController.js"
+import { logActivity } from "../utils/activityLog.js"
 
 const ensureFavoriteTable = async () => {
     await pool.query(`
@@ -42,6 +43,14 @@ export const createProduct = async (req, res) => {
             "INSERT INTO products (name, description, price, stock, image_url, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
             [name, description, price, stock, image_url, category]
         )
+        await logActivity({
+            userId: req.user.id,
+            action: "product_created",
+            entityType: "product",
+            entityId: result.rows[0].id,
+            description: "Admin creo producto",
+            metadata: { stock: Number(stock || 0), price: Number(price || 0) },
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.status(201).json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al crear producto", error: err.message })
@@ -52,6 +61,9 @@ export const updateProduct = async (req, res) => {
     const { id } = req.params
     const { name, description, price, stock, category } = req.body
     try {
+        const previous = await pool.query("SELECT stock FROM products WHERE id = $1", [id])
+        if (previous.rows.length === 0)
+            return res.status(404).json({ message: "Producto no encontrado" })
         let image_url
         if (req.file) {
             image_url = req.file.path
@@ -67,6 +79,17 @@ export const updateProduct = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Producto no encontrado" })
+        await logActivity({
+            userId: req.user.id,
+            action: "product_updated",
+            entityType: "product",
+            entityId: Number(id),
+            description: "Admin actualizo producto",
+            metadata: {
+                previous_stock: Number(previous.rows[0].stock || 0),
+                new_stock: Number(stock || 0),
+            },
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar producto", error: err.message })
@@ -77,6 +100,13 @@ export const deleteProduct = async (req, res) => {
     const { id } = req.params
     try {
         await pool.query("DELETE FROM products WHERE id = $1", [id])
+        await logActivity({
+            userId: req.user.id,
+            action: "product_deleted",
+            entityType: "product",
+            entityId: Number(id),
+            description: "Admin elimino producto",
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json({ message: "Producto eliminado correctamente" })
     } catch (err) {
         res.status(500).json({ message: "Error al eliminar producto", error: err.message })
