@@ -121,10 +121,25 @@ export const forgotPassword = async (req, res) => {
             [tokenHash, expiresAt, user.id]
         )
 
-        await sendPasswordResetEmail({
+        let emailResult
+        try {
+            emailResult = await sendPasswordResetEmail({
+                to: user.email,
+                name: user.name,
+                resetUrl: buildPasswordResetUrl(token),
+            })
+        } catch (emailError) {
+            console.error("Error enviando correo recuperacion:", emailError.message)
+            return res.status(502).json({
+                message: "No se pudo enviar el correo de recuperacion",
+                error: emailError.message,
+            })
+        }
+        console.log("Resultado correo recuperacion:", {
             to: user.email,
-            name: user.name,
-            resetUrl: buildPasswordResetUrl(token),
+            sent: emailResult.sent,
+            skipped: emailResult.skipped,
+            reason: emailResult.reason,
         })
 
         res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contrasena" })
