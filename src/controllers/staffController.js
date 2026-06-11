@@ -1,9 +1,10 @@
 import pool from "../config/db.js"
 import { ensureCommerceTables } from "../config/bootstrapAdmin.js"
-import { addPointsForOrder, restoreUsedPointsForOrder } from "./pointsController.js"
+import { addPointsForOrder, ensurePointsTables, restoreUsedPointsForOrder } from "./pointsController.js"
 import { cancelServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
 import { ensureSurveyTable } from "./surveyController.js"
 import { ensureActivityLogTable, getActivityLogs, getRecentActivityLogs, logActivity } from "../utils/activityLog.js"
+import { cancelExpiredPendingOrders } from "../utils/pendingOrders.js"
 
 const ensureStockReportsTable = async () => {
     await pool.query(`
@@ -21,6 +22,49 @@ const ensureStockReportsTable = async () => {
     `)
 }
 
+const ensureStockMovementsTable = async () => {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS stock_movements (
+            id SERIAL PRIMARY KEY,
+            product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+            user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            movement_type VARCHAR(30) NOT NULL DEFAULT 'restock',
+            quantity INTEGER NOT NULL,
+            previous_stock INTEGER NOT NULL DEFAULT 0,
+            new_stock INTEGER NOT NULL DEFAULT 0,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    `)
+}
+
+const ensureAdminNotificationDismissalsTable = async () => {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS admin_notification_dismissals (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            notification_type VARCHAR(80) NOT NULL,
+            reference_id VARCHAR(120) NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(user_id, notification_type, reference_id)
+        )
+    `)
+}
+
+const getDismissedNotificationKeys = async (userId) => {
+    await ensureAdminNotificationDismissalsTable()
+    const result = await pool.query(
+        `SELECT notification_type, reference_id
+         FROM admin_notification_dismissals
+         WHERE user_id=$1`,
+        [userId]
+    )
+    return new Set(result.rows.map((row) => `${row.notification_type}:${row.reference_id}`))
+}
+
+const isNotificationDismissed = (dismissed, type, referenceId) =>
+    dismissed.has(`${type}:${String(referenceId)}`)
+
 export const getAdminDashboard = async (req, res) => {
     try {
         await ensureCommerceTables()
@@ -28,6 +72,7 @@ export const getAdminDashboard = async (req, res) => {
         await ensureServiceTables()
         await ensureStockReportsTable()
         await ensureActivityLogTable()
+        await cancelExpiredPendingOrders()
 
         const [
             salesToday,
@@ -217,58 +262,89 @@ export const getAdminActivity = async (req, res) => {
     }
 }
 
+export const cancelAdminPendingOrders = async (req, res) => {
+    try {
+        const result = await cancelExpiredPendingOrders({ force: true })
+        res.json({
+            message: `${result.cancelled} pedidos pendientes cancelados`,
+            ...result,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al cancelar pedidos pendientes", error: err.message })
+    }
+}
+
 export const getAdminNotifications = async (req, res) => {
     try {
         await ensureCommerceTables()
         await ensureStockReportsTable()
+        const dismissed = await getDismissedNotificationKeys(req.user.id)
 
-        const [stockReports, creditApplications, pendingOrders, stockReportCount, creditApplicationCount, pendingOrderCount, transferPending, outOfStock] = await Promise.all([
+        const [stockReports, creditApplications, pendingOrders, transferPending, outOfStock] = await Promise.all([
             pool.query(
                 `SELECT sr.id, sr.product_id, sr.reason, sr.created_at, p.name as product_name
                  FROM stock_reports sr
                  JOIN products p ON p.id = sr.product_id
                  WHERE sr.status='pending'
                  ORDER BY sr.created_at DESC
-                 LIMIT 8`
+                 LIMIT 80`
             ),
             pool.query(
                 `SELECT id, name, lastname, email, user_type, created_at
                  FROM users
                  WHERE user_type IN ('maestro_pending', 'pyme_pending')
                  ORDER BY created_at DESC
-                 LIMIT 8`
+                 LIMIT 80`
             ),
             pool.query(
                 `SELECT id, total, status, created_at
                  FROM orders
                  WHERE status IN ('pending', 'paid')
                  ORDER BY created_at DESC
-                 LIMIT 8`
+                 LIMIT 80`
             ),
-            pool.query("SELECT COUNT(*)::int as count FROM stock_reports WHERE status='pending'"),
-            pool.query("SELECT COUNT(*)::int as count FROM users WHERE user_type IN ('maestro_pending', 'pyme_pending')"),
-            pool.query("SELECT COUNT(*)::int as count FROM orders WHERE status IN ('pending', 'paid')"),
             pool.query("SELECT COUNT(*)::int as count FROM orders WHERE status='transfer_pending'"),
             pool.query("SELECT COUNT(*)::int as count FROM products WHERE stock <= 0"),
         ])
 
+        const stockReportRows = stockReports.rows.filter((report) =>
+            !isNotificationDismissed(dismissed, "stock_report", report.id)
+        )
+        const creditApplicationRows = creditApplications.rows.filter((application) =>
+            !isNotificationDismissed(dismissed, "credit_application", application.id)
+        )
+        const pendingOrderRows = pendingOrders.rows.filter((order) =>
+            !isNotificationDismissed(dismissed, "pending_order", order.id)
+        )
+        const transferPendingCount = Number(transferPending.rows[0]?.count || 0)
+        const outOfStockCount = Number(outOfStock.rows[0]?.count || 0)
+        const visibleTransferPending = isNotificationDismissed(dismissed, "transfer_pending", `count:${transferPendingCount}`)
+            ? 0
+            : transferPendingCount
+        const visibleOutOfStock = isNotificationDismissed(dismissed, "out_of_stock", `count:${outOfStockCount}`)
+            ? 0
+            : outOfStockCount
+
         const items = [
-            ...stockReports.rows.map((report) => ({
+            ...stockReportRows.map((report) => ({
                 type: "stock_report",
+                reference_id: String(report.id),
                 label: "Reporte de bodega",
                 text: report.product_name,
                 target: "/admin/products",
                 created_at: report.created_at,
             })),
-            ...creditApplications.rows.map((application) => ({
+            ...creditApplicationRows.map((application) => ({
                 type: "credit_application",
+                reference_id: String(application.id),
                 label: "Postulacion FerreCredito",
                 text: `${application.name || ""} ${application.lastname || ""}`.trim() || application.email,
                 target: "/admin/credits",
                 created_at: application.created_at,
             })),
-            ...pendingOrders.rows.map((order) => ({
+            ...pendingOrderRows.map((order) => ({
                 type: "pending_order",
+                reference_id: String(order.id),
                 label: "Pedido pendiente",
                 text: `Pedido #${order.id}`,
                 target: "/admin/dashboard",
@@ -277,11 +353,11 @@ export const getAdminNotifications = async (req, res) => {
         ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 12)
 
         const counts = {
-            stock_reports: Number(stockReportCount.rows[0]?.count || 0),
-            credit_applications: Number(creditApplicationCount.rows[0]?.count || 0),
-            pending_orders: Number(pendingOrderCount.rows[0]?.count || 0),
-            transfer_pending: Number(transferPending.rows[0]?.count || 0),
-            out_of_stock: Number(outOfStock.rows[0]?.count || 0),
+            stock_reports: stockReportRows.length,
+            credit_applications: creditApplicationRows.length,
+            pending_orders: pendingOrderRows.length,
+            transfer_pending: visibleTransferPending,
+            out_of_stock: visibleOutOfStock,
         }
 
         res.json({
@@ -294,10 +370,58 @@ export const getAdminNotifications = async (req, res) => {
     }
 }
 
+export const clearAdminNotifications = async (req, res) => {
+    try {
+        await ensureCommerceTables()
+        await ensureStockReportsTable()
+        await ensureAdminNotificationDismissalsTable()
+
+        const [stockReports, creditApplications, pendingOrders, transferPending, outOfStock] = await Promise.all([
+            pool.query("SELECT id FROM stock_reports WHERE status='pending'"),
+            pool.query("SELECT id FROM users WHERE user_type IN ('maestro_pending', 'pyme_pending')"),
+            pool.query("SELECT id FROM orders WHERE status IN ('pending', 'paid')"),
+            pool.query("SELECT COUNT(*)::int as count FROM orders WHERE status='transfer_pending'"),
+            pool.query("SELECT COUNT(*)::int as count FROM products WHERE stock <= 0"),
+        ])
+
+        const dismissals = [
+            ...stockReports.rows.map((row) => ({ type: "stock_report", referenceId: String(row.id) })),
+            ...creditApplications.rows.map((row) => ({ type: "credit_application", referenceId: String(row.id) })),
+            ...pendingOrders.rows.map((row) => ({ type: "pending_order", referenceId: String(row.id) })),
+        ]
+        const transferPendingCount = Number(transferPending.rows[0]?.count || 0)
+        const outOfStockCount = Number(outOfStock.rows[0]?.count || 0)
+
+        if (transferPendingCount > 0) {
+            dismissals.push({ type: "transfer_pending", referenceId: `count:${transferPendingCount}` })
+        }
+        if (outOfStockCount > 0) {
+            dismissals.push({ type: "out_of_stock", referenceId: `count:${outOfStockCount}` })
+        }
+
+        for (const dismissal of dismissals) {
+            await pool.query(
+                `INSERT INTO admin_notification_dismissals (user_id, notification_type, reference_id)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (user_id, notification_type, reference_id) DO NOTHING`,
+                [req.user.id, dismissal.type, dismissal.referenceId]
+            )
+        }
+
+        res.json({
+            message: "Notificaciones vaciadas",
+            cleared: dismissals.length,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al vaciar notificaciones", error: err.message })
+    }
+}
+
 // ===== VENDEDOR =====
 
 export const getOrders = async (req, res) => {
     try {
+        await cancelExpiredPendingOrders()
         const orders = await pool.query(
             `SELECT o.*, u.name as user_name, u.email as user_email, u.phone as user_phone,
         COALESCE(json_agg(json_build_object(
@@ -341,15 +465,108 @@ export const updateOrderStatus = async (req, res) => {
 
 export const getClients = async (req, res) => {
     try {
+        await ensureCommerceTables()
+        await ensurePointsTables()
         const result = await pool.query(
-            `SELECT id, name, lastname, email, rut, phone, user_type, created_at
-       FROM users
-       WHERE role = 'cliente'
-       ORDER BY created_at DESC`
+            `SELECT u.id, u.name, u.lastname, u.email, u.rut, u.phone, u.user_type, u.address, u.created_at,
+                    COALESCE(COUNT(o.id), 0)::int as order_count,
+                    COALESCE(SUM(CASE WHEN o.status <> 'cancelled' THEN o.total ELSE 0 END), 0) as total_spent,
+                    COALESCE(up.balance, 0)::int as points_balance,
+                    fc.credit_limit,
+                    fc.balance_used,
+                    fc.is_active as credit_active
+             FROM users u
+             LEFT JOIN orders o ON o.user_id = u.id
+             LEFT JOIN user_points up ON up.user_id = u.id
+             LEFT JOIN ferre_credits fc ON fc.user_id = u.id
+             WHERE u.role NOT IN ('admin', 'vendedor', 'bodeguero', 'contador')
+             GROUP BY u.id, up.balance, fc.credit_limit, fc.balance_used, fc.is_active
+             ORDER BY u.created_at DESC`
         )
         res.json(result.rows)
     } catch (err) {
         res.status(500).json({ message: "Error al obtener clientes", error: err.message })
+    }
+}
+
+export const getClientDetail = async (req, res) => {
+    const { id } = req.params
+    try {
+        await ensureCommerceTables()
+        await ensurePointsTables()
+        await ensureActivityLogTable()
+        const [client, orders, points, pointTransactions, credit, installments, activity] = await Promise.all([
+            pool.query(
+                `SELECT id, name, lastname, email, rut, phone, user_type, business_name, profession, address, created_at
+                 FROM users
+                 WHERE id=$1 AND role NOT IN ('admin', 'vendedor', 'bodeguero', 'contador')`,
+                [id]
+            ),
+            pool.query(
+                `SELECT o.*,
+                        COALESCE(json_agg(json_build_object(
+                            'product_id', oi.product_id,
+                            'name', p.name,
+                            'quantity', oi.quantity,
+                            'price', oi.price,
+                            'image_url', p.image_url
+                        )) FILTER (WHERE oi.id IS NOT NULL), '[]') as items
+                 FROM orders o
+                 LEFT JOIN order_items oi ON o.id = oi.order_id
+                 LEFT JOIN products p ON oi.product_id = p.id
+                 WHERE o.user_id=$1
+                 GROUP BY o.id
+                 ORDER BY o.created_at DESC
+                 LIMIT 12`,
+                [id]
+            ),
+            pool.query("SELECT COALESCE(balance, 0)::int as balance FROM user_points WHERE user_id=$1", [id]),
+            pool.query(
+                `SELECT id, order_id, type, points, description, created_at
+                 FROM point_transactions
+                 WHERE user_id=$1
+                 ORDER BY created_at DESC
+                 LIMIT 10`,
+                [id]
+            ),
+            pool.query("SELECT * FROM ferre_credits WHERE user_id=$1", [id]),
+            pool.query(
+                `SELECT id, order_id, total_amount, installments, amount_per_installment,
+                        paid_installments, status, due_date, created_at
+                 FROM ferre_credit_installments
+                 WHERE user_id=$1
+                 ORDER BY created_at DESC
+                 LIMIT 10`,
+                [id]
+            ),
+            pool.query(
+                `SELECT al.*, u.name as user_name, u.lastname as user_lastname, u.role as user_role
+                 FROM activity_logs al
+                 LEFT JOIN users u ON u.id = al.user_id
+                 WHERE al.user_id=$1
+                 ORDER BY al.created_at DESC
+                 LIMIT 10`,
+                [id]
+            ),
+        ])
+
+        if (client.rows.length === 0) {
+            return res.status(404).json({ message: "Cliente no encontrado" })
+        }
+
+        res.json({
+            client: client.rows[0],
+            orders: orders.rows,
+            points: {
+                balance: Number(points.rows[0]?.balance || 0),
+                transactions: pointTransactions.rows,
+            },
+            ferre_credit: credit.rows[0] || null,
+            ferre_credit_installments: installments.rows,
+            activity: activity.rows,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener ficha de cliente", error: err.message })
     }
 }
 
@@ -363,6 +580,26 @@ export const getInventory = async (req, res) => {
         res.json(result.rows)
     } catch (err) {
         res.status(500).json({ message: "Error al obtener inventario", error: err.message })
+    }
+}
+
+export const getMyStockReports = async (req, res) => {
+    try {
+        await ensureStockReportsTable()
+        const isAdmin = req.user.role === "admin"
+        const result = await pool.query(
+            `SELECT sr.id, sr.product_id, sr.reason, sr.status, sr.created_at,
+                    p.name as product_name, p.stock
+             FROM stock_reports sr
+             JOIN products p ON p.id = sr.product_id
+             WHERE sr.status='pending'
+               AND ($1::boolean = TRUE OR sr.reported_by=$2)
+             ORDER BY sr.created_at DESC`,
+            [isAdmin, req.user.id]
+        )
+        res.json(result.rows)
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener tus avisos de stock", error: err.message })
     }
 }
 
@@ -479,6 +716,85 @@ export const updateStock = async (req, res) => {
     }
 }
 
+export const restockProduct = async (req, res) => {
+    const { id } = req.params
+    const quantity = Math.floor(Number(req.body.quantity || 0))
+    const reason = (req.body.reason || "Reposicion de inventario").trim()
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+        return res.status(400).json({ message: "La cantidad de reposicion debe ser mayor a 0" })
+    }
+
+    const client = await pool.connect()
+    try {
+        await ensureStockReportsTable()
+        await ensureStockMovementsTable()
+        await client.query("BEGIN")
+
+        const product = await client.query("SELECT id, name, stock FROM products WHERE id=$1 FOR UPDATE", [id])
+        if (product.rows.length === 0) {
+            await client.query("ROLLBACK")
+            return res.status(404).json({ message: "Producto no encontrado" })
+        }
+
+        const previousStock = Number(product.rows[0].stock || 0)
+        const newStock = previousStock + quantity
+        const updated = await client.query(
+            "UPDATE products SET stock=$1 WHERE id=$2 RETURNING *",
+            [newStock, id]
+        )
+        const movement = await client.query(
+            `INSERT INTO stock_movements (
+                product_id, user_id, movement_type, quantity, previous_stock, new_stock, reason
+             )
+             VALUES ($1, $2, 'restock', $3, $4, $5, $6)
+             RETURNING *`,
+            [id, req.user.id, quantity, previousStock, newStock, reason || "Reposicion de inventario"]
+        )
+
+        await client.query(
+            `UPDATE stock_reports
+             SET status='resolved', resolved_by=$1, resolved_at=NOW()
+             WHERE product_id=$2 AND status='pending'`,
+            [req.user.id, id]
+        )
+
+        await client.query("COMMIT")
+        await logActivity({
+            userId: req.user.id,
+            action: "stock_restocked",
+            entityType: "product",
+            entityId: Number(id),
+            description: `Admin repuso ${quantity} unidades de ${product.rows[0].name}`,
+            metadata: { previous_stock: previousStock, new_stock: newStock, reason },
+        }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+
+        res.json({ product: updated.rows[0], movement: movement.rows[0] })
+    } catch (err) {
+        await client.query("ROLLBACK")
+        res.status(500).json({ message: "Error al reponer stock", error: err.message })
+    } finally {
+        client.release()
+    }
+}
+
+export const getStockMovements = async (req, res) => {
+    try {
+        await ensureStockMovementsTable()
+        const result = await pool.query(
+            `SELECT sm.*, p.name as product_name, u.name as user_name, u.lastname as user_lastname, u.role as user_role
+             FROM stock_movements sm
+             LEFT JOIN products p ON p.id = sm.product_id
+             LEFT JOIN users u ON u.id = sm.user_id
+             ORDER BY sm.created_at DESC
+             LIMIT 120`
+        )
+        res.json(result.rows)
+    } catch (err) {
+        res.status(500).json({ message: "Error al obtener historial de stock", error: err.message })
+    }
+}
+
 export const getOrdersForWarehouse = async (req, res) => {
     try {
         const orders = await pool.query(
@@ -559,6 +875,7 @@ export const updateWarehouseOrderStatus = async (req, res) => {
 
 export const getAccountingOrders = async (req, res) => {
     try {
+        await cancelExpiredPendingOrders()
         const orders = await pool.query(
             `SELECT o.*, u.name as user_name, u.email as user_email, u.phone as user_phone,
         COALESCE(json_agg(json_build_object(

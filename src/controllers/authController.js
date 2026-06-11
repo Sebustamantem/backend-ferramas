@@ -1,10 +1,18 @@
 import bcrypt from "bcryptjs"
+import crypto from "crypto"
 import jwt from "jsonwebtoken"
 import pool from "../config/db.js"
 import { ensureUsersTable } from "../config/bootstrapAdmin.js"
+import { sendPasswordResetEmail } from "../utils/email.js"
 import { formatRut, isRutLengthValid } from "../utils/rut.js"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
+const hashResetToken = (token) => crypto.createHash("sha256").update(token).digest("hex")
+
+const buildPasswordResetUrl = (token) => {
+    const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173"
+    return `${frontendUrl.replace(/\/$/, "")}/recuperar-password/${token}`
+}
 
 export const register = async (req, res) => {
     const { name, lastname, email, password, rut, phone, user_type, business_name, profession } = req.body
@@ -77,6 +85,100 @@ export const login = async (req, res) => {
             },
             token
         })
+    } catch (err) {
+        res.status(500).json({ message: "Error en el servidor", error: err.message })
+    }
+}
+
+export const forgotPassword = async (req, res) => {
+    const email = String(req.body.email || "").trim().toLowerCase()
+
+    try {
+        await ensureUsersTable()
+
+        if (!email) {
+            return res.status(400).json({ message: "Ingresa tu correo" })
+        }
+
+        const result = await pool.query(
+            "SELECT id, name, email FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+            [email]
+        )
+
+        if (result.rows.length === 0) {
+            return res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contrasena" })
+        }
+
+        const user = result.rows[0]
+        const token = crypto.randomBytes(32).toString("hex")
+        const tokenHash = hashResetToken(token)
+        const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
+
+        await pool.query(
+            `UPDATE users
+             SET password_reset_token=$1, password_reset_expires=$2
+             WHERE id=$3`,
+            [tokenHash, expiresAt, user.id]
+        )
+
+        await sendPasswordResetEmail({
+            to: user.email,
+            name: user.name,
+            resetUrl: buildPasswordResetUrl(token),
+        })
+
+        res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contrasena" })
+    } catch (err) {
+        res.status(500).json({ message: "Error en el servidor", error: err.message })
+    }
+}
+
+export const resetPassword = async (req, res) => {
+    const { token } = req.params
+    const { password } = req.body
+
+    try {
+        await ensureUsersTable()
+
+        if (!token) {
+            return res.status(400).json({ message: "Token invalido" })
+        }
+
+        if (!password || password.length < 8) {
+            return res.status(400).json({ message: "La contrasena debe tener al menos 8 caracteres" })
+        }
+
+        const tokenHash = hashResetToken(token)
+        const result = await pool.query(
+            `SELECT id, role, rut
+             FROM users
+             WHERE password_reset_token=$1
+               AND password_reset_expires > NOW()
+             LIMIT 1`,
+            [tokenHash]
+        )
+
+        if (result.rows.length === 0) {
+            return res.status(400).json({ message: "El enlace es invalido o expiro" })
+        }
+
+        const user = result.rows[0]
+        if (user.role === "admin" && normalizeRut(password) === normalizeRut(user.rut)) {
+            return res.status(400).json({ message: "La nueva contrasena no puede ser el RUT" })
+        }
+
+        const hashed = await bcrypt.hash(password, 10)
+        await pool.query(
+            `UPDATE users
+             SET password=$1,
+                 must_change_password=FALSE,
+                 password_reset_token=NULL,
+                 password_reset_expires=NULL
+             WHERE id=$2`,
+            [hashed, user.id]
+        )
+
+        res.json({ message: "Contrasena actualizada correctamente" })
     } catch (err) {
         res.status(500).json({ message: "Error en el servidor", error: err.message })
     }

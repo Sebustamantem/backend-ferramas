@@ -1,5 +1,6 @@
 import pool from "../config/db.js"
 import { calculatePointsForAmount, ensurePointsTables } from "./pointsController.js"
+import { cancelExpiredPendingOrders } from "../utils/pendingOrders.js"
 
 export const createOrder = async (req, res) => {
     const { address } = req.body
@@ -51,6 +52,7 @@ export const createOrder = async (req, res) => {
 
 export const getMyOrders = async (req, res) => {
     try {
+        await cancelExpiredPendingOrders()
         const orders = await pool.query(
             `SELECT o.*,
         COALESCE(json_agg(json_build_object(
@@ -76,6 +78,7 @@ export const getMyOrders = async (req, res) => {
 
 export const getAllOrders = async (req, res) => {
     try {
+        await cancelExpiredPendingOrders()
         const orders = await pool.query(
             `SELECT o.*, u.name as user_name, u.email as user_email,
         COALESCE(json_agg(json_build_object(
@@ -120,6 +123,7 @@ export const updateOrderStatus = async (req, res) => {
 export const getOrderById = async (req, res) => {
     const { id } = req.params
     try {
+        await cancelExpiredPendingOrders()
         await ensurePointsTables()
         const order = await pool.query(
             `SELECT o.*, u.name as user_name, u.email as user_email,

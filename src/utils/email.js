@@ -21,30 +21,19 @@ const buildServiceContactHtml = ({ request }) => `
     </div>
 `
 
-export const sendServiceContactEmail = async ({ request, orderId }) => {
-    const to = [request.customer_email, request.professional_email].filter(Boolean)
+const sendEmail = async ({ to, subject, html }) => {
+    const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
     const from = process.env.MAIL_FROM
     const apiKey = process.env.RESEND_API_KEY
-    const subject = `Contacto por asesoria FERREMAS - Pedido #${orderId}`
 
-    if (to.length === 0) {
+    if (recipients.length === 0) {
         return { sent: false, skipped: true, reason: "Sin destinatarios" }
     }
 
     if (!apiKey || !from) {
-        console.log("Correo mixto servicio Ferremas:", {
-            to,
+        console.log("Correo Ferremas no enviado:", {
+            to: recipients,
             subject,
-            cliente: {
-                nombre: request.customer_name,
-                email: request.customer_email,
-                telefono: request.customer_phone,
-            },
-            profesional: {
-                nombre: request.professional_name,
-                email: request.professional_email,
-                telefono: request.professional_phone,
-            },
             nota: "Configura RESEND_API_KEY y MAIL_FROM para enviar correos reales.",
         })
         return { sent: false, skipped: true, reason: "Email no configurado" }
@@ -58,16 +47,46 @@ export const sendServiceContactEmail = async ({ request, orderId }) => {
         },
         body: JSON.stringify({
             from,
-            to,
+            to: recipients,
             subject,
-            html: buildServiceContactHtml({ request }),
+            html,
         }),
     })
 
     if (!response.ok) {
         const detail = await response.text()
-        throw new Error(`No se pudo enviar correo mixto: ${detail}`)
+        throw new Error(`No se pudo enviar correo: ${detail}`)
     }
 
     return { sent: true, skipped: false }
+}
+
+export const sendServiceContactEmail = async ({ request, orderId }) => {
+    const to = [request.customer_email, request.professional_email].filter(Boolean)
+    const subject = `Contacto por asesoria FERREMAS - Pedido #${orderId}`
+
+    return sendEmail({
+        to,
+        subject,
+        html: buildServiceContactHtml({ request }),
+    })
+}
+
+export const sendPasswordResetEmail = async ({ to, name, resetUrl }) => {
+    return sendEmail({
+        to,
+        subject: "Recupera tu contrasena FERREMAS",
+        html: `
+            <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
+                <h2>Recupera tu contrasena</h2>
+                <p>Hola ${name || "cliente"}, recibimos una solicitud para cambiar la contrasena de tu cuenta FERREMAS.</p>
+                <p>
+                    <a href="${resetUrl}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:bold;">
+                        Cambiar contrasena
+                    </a>
+                </p>
+                <p>Este enlace vence en 1 hora. Si no solicitaste este cambio, puedes ignorar este correo.</p>
+            </div>
+        `,
+    })
 }

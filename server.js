@@ -2,6 +2,7 @@ import "dotenv/config"
 import app from "./src/app.js"
 import pool from "./src/config/db.js"
 import { bootstrapAdmin, ensureCommerceTables } from "./src/config/bootstrapAdmin.js"
+import { cancelExpiredPendingOrders } from "./src/utils/pendingOrders.js"
 
 const PORT = process.env.PORT || 3000
 
@@ -12,6 +13,19 @@ const startServer = async () => {
 
         const admin = await bootstrapAdmin()
         await ensureCommerceTables()
+        await cancelExpiredPendingOrders()
+            .then(({ cancelled }) => {
+                if (cancelled > 0) console.log(`Pedidos pendientes cancelados por no pago: ${cancelled}`)
+            })
+            .catch((err) => console.error("Error cancelando pedidos pendientes:", err.message))
+
+        setInterval(() => {
+            cancelExpiredPendingOrders()
+                .then(({ cancelled }) => {
+                    if (cancelled > 0) console.log(`Pedidos pendientes cancelados por no pago: ${cancelled}`)
+                })
+                .catch((err) => console.error("Error cancelando pedidos pendientes:", err.message))
+        }, 5 * 60 * 1000)
         if (admin.created) {
             console.log("Admin inicial creado automaticamente")
             console.log(`Email: ${admin.email}`)

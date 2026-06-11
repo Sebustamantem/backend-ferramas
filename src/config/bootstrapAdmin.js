@@ -27,6 +27,8 @@ export const ensureUsersTable = async () => {
             address JSONB,
             first_purchase_used BOOLEAN NOT NULL DEFAULT FALSE,
             must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
+            password_reset_token VARCHAR(255),
+            password_reset_expires TIMESTAMP,
             created_at TIMESTAMP DEFAULT NOW()
         )
     `)
@@ -41,6 +43,8 @@ export const ensureUsersTable = async () => {
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS address JSONB")
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_purchase_used BOOLEAN NOT NULL DEFAULT FALSE")
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE")
+    await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_token VARCHAR(255)")
+    await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_expires TIMESTAMP")
     await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()")
 }
 
