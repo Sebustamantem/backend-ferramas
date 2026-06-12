@@ -106,7 +106,7 @@ export const forgotPassword = async (req, res) => {
         )
 
         if (result.rows.length === 0) {
-            return res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contrasena" })
+            return res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contraseña" })
         }
 
         const user = result.rows[0]
@@ -142,7 +142,7 @@ export const forgotPassword = async (req, res) => {
             reason: emailResult.reason,
         })
 
-        res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contrasena" })
+        res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contraseña" })
     } catch (err) {
         res.status(500).json({ message: "Error en el servidor", error: err.message })
     }
@@ -160,7 +160,7 @@ export const resetPassword = async (req, res) => {
         }
 
         if (!password || password.length < 8) {
-            return res.status(400).json({ message: "La contrasena debe tener al menos 8 caracteres" })
+            return res.status(400).json({ message: "La contraseña debe tener al menos 8 caracteres" })
         }
 
         const tokenHash = hashResetToken(token)
@@ -179,7 +179,7 @@ export const resetPassword = async (req, res) => {
 
         const user = result.rows[0]
         if (user.role === "admin" && normalizeRut(password) === normalizeRut(user.rut)) {
-            return res.status(400).json({ message: "La nueva contrasena no puede ser el RUT" })
+            return res.status(400).json({ message: "La nueva contraseña no puede ser el RUT" })
         }
 
         const hashed = await bcrypt.hash(password, 10)
@@ -193,7 +193,7 @@ export const resetPassword = async (req, res) => {
             [hashed, user.id]
         )
 
-        res.json({ message: "Contrasena actualizada correctamente" })
+        res.json({ message: "Contraseña actualizada correctamente" })
     } catch (err) {
         res.status(500).json({ message: "Error en el servidor", error: err.message })
     }

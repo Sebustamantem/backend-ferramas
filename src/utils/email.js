@@ -31,6 +31,10 @@ const parseSender = (from = "") => {
     }
 }
 
+const getFrontendUrl = () => (process.env.FRONTEND_URL || "https://frontend-ferremas.onrender.com").replace(/\/$/, "")
+
+const getLogoUrl = () => `${getFrontendUrl()}/images/Logo.png`
+
 const sendEmail = async ({ to, subject, html }) => {
     const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
     const from = process.env.MAIL_FROM
@@ -83,19 +87,50 @@ export const sendServiceContactEmail = async ({ request, orderId }) => {
 }
 
 export const sendPasswordResetEmail = async ({ to, name, resetUrl }) => {
+    const logoUrl = getLogoUrl()
+
     return sendEmail({
         to,
-        subject: "Recupera tu contrasena FERREMAS",
+        subject: "Recupera tu contraseña FERREMAS",
         html: `
-            <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
-                <h2>Recupera tu contrasena</h2>
-                <p>Hola ${name || "cliente"}, recibimos una solicitud para cambiar la contrasena de tu cuenta FERREMAS.</p>
-                <p>
-                    <a href="${resetUrl}" style="display:inline-block;background:#0f766e;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:bold;">
-                        Cambiar contrasena
-                    </a>
-                </p>
-                <p>Este enlace vence en 1 hora. Si no solicitaste este cambio, puedes ignorar este correo.</p>
+            <div style="margin:0;padding:0;background:#f3f6f5;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+                <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
+                    <div style="background:#ffffff;border:1px solid #d9e4df;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,0.08);">
+                        <div style="background:#0f766e;padding:24px 28px;text-align:center;">
+                            <img src="${logoUrl}" alt="FERREMAS" width="86" style="display:block;margin:0 auto 10px;max-width:86px;height:auto;border:0;" />
+                            <div style="font-size:24px;font-weight:800;letter-spacing:1px;color:#ffffff;">FERREMAS</div>
+                            <div style="font-size:13px;color:#ccfbf1;margin-top:6px;">Recuperación de cuenta</div>
+                        </div>
+
+                        <div style="padding:32px 28px;">
+                            <h1 style="margin:0 0 14px;font-size:24px;line-height:1.25;color:#111827;">Crea una nueva contraseña</h1>
+                            <p style="margin:0 0 20px;font-size:15px;line-height:1.7;color:#374151;">
+                                Hola ${name || "cliente"}, recibimos una solicitud para cambiar la contraseña de tu cuenta FERREMAS.
+                            </p>
+
+                            <div style="text-align:center;margin:28px 0;">
+                                <a href="${resetUrl}" style="display:inline-block;background:#f97316;color:#ffffff;text-decoration:none;padding:14px 24px;border-radius:10px;font-size:15px;font-weight:700;">
+                                    Cambiar contraseña
+                                </a>
+                            </div>
+
+                            <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px;margin:0 0 20px;">
+                                <p style="margin:0;font-size:14px;line-height:1.6;color:#9a3412;">
+                                    Este enlace vence en 1 hora. Si no solicitaste este cambio, puedes ignorar este correo.
+                                </p>
+                            </div>
+
+                            <p style="margin:0;font-size:13px;line-height:1.6;color:#6b7280;">
+                                Si el botón no funciona, copia y pega este enlace en tu navegador:<br />
+                                <a href="${resetUrl}" style="color:#0f766e;word-break:break-all;">${resetUrl}</a>
+                            </p>
+                        </div>
+                    </div>
+
+                    <p style="margin:18px 0 0;text-align:center;font-size:12px;color:#6b7280;">
+                        FERREMAS - Herramientas, construcción y servicios para tu hogar.
+                    </p>
+                </div>
             </div>
         `,
     })
