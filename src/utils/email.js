@@ -1,5 +1,3 @@
-import nodemailer from "nodemailer"
-
 const buildServiceContactHtml = ({ request }) => `
     <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
         <h2>Contacto por asesoria FERREMAS</h2>
@@ -23,43 +21,52 @@ const buildServiceContactHtml = ({ request }) => `
     </div>
 `
 
+const parseSender = (from = "") => {
+    const match = String(from).match(/^(.*?)\s*<([^>]+)>$/)
+    if (!match) return { email: from }
+
+    return {
+        name: match[1].trim(),
+        email: match[2].trim(),
+    }
+}
+
 const sendEmail = async ({ to, subject, html }) => {
     const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
     const from = process.env.MAIL_FROM
-    const host = process.env.SMTP_HOST
-    const port = Number(process.env.SMTP_PORT || 587)
-    const user = process.env.SMTP_USER
-    const pass = process.env.SMTP_PASS
+    const apiKey = process.env.BREVO_API_KEY
 
     if (recipients.length === 0) {
         return { sent: false, skipped: true, reason: "Sin destinatarios" }
     }
 
-    if (!host || !user || !pass || !from) {
+    if (!apiKey || !from) {
         console.log("Correo Ferremas no enviado:", {
             to: recipients,
             subject,
-            nota: "Configura SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS y MAIL_FROM para enviar correos reales.",
+            nota: "Configura BREVO_API_KEY y MAIL_FROM para enviar correos reales.",
         })
         return { sent: false, skipped: true, reason: "Email no configurado" }
     }
 
-    const transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        auth: {
-            user,
-            pass,
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+            "api-key": apiKey,
+            "Content-Type": "application/json",
         },
+        body: JSON.stringify({
+            sender: parseSender(from),
+            to: recipients.map((email) => ({ email })),
+            subject,
+            htmlContent: html,
+        }),
     })
 
-    await transporter.sendMail({
-        from,
-        to: recipients,
-        subject,
-        html,
-    })
+    if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(`No se pudo enviar correo Brevo: ${detail}`)
+    }
 
     return { sent: true, skipped: false }
 }
