@@ -1,3 +1,5 @@
+import nodemailer from "nodemailer"
+
 const buildServiceContactHtml = ({ request }) => `
     <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
         <h2>Contacto por asesoria FERREMAS</h2>
@@ -23,40 +25,37 @@ const buildServiceContactHtml = ({ request }) => `
 
 const sendEmail = async ({ to, subject, html }) => {
     const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
-    const from = process.env.MAIL_FROM
-    const apiKey = process.env.RESEND_API_KEY
+    const user = process.env.MAIL_USER
+    const pass = process.env.MAIL_PASS
+    const from = process.env.MAIL_FROM || user
 
     if (recipients.length === 0) {
         return { sent: false, skipped: true, reason: "Sin destinatarios" }
     }
 
-    if (!apiKey || !from) {
+    if (!user || !pass || !from) {
         console.log("Correo Ferremas no enviado:", {
             to: recipients,
             subject,
-            nota: "Configura RESEND_API_KEY y MAIL_FROM para enviar correos reales.",
+            nota: "Configura MAIL_USER, MAIL_PASS y MAIL_FROM para enviar correos reales.",
         })
         return { sent: false, skipped: true, reason: "Email no configurado" }
     }
 
-    const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
+    const transporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: {
+            user,
+            pass,
         },
-        body: JSON.stringify({
-            from,
-            to: recipients,
-            subject,
-            html,
-        }),
     })
 
-    if (!response.ok) {
-        const detail = await response.text()
-        throw new Error(`No se pudo enviar correo: ${detail}`)
-    }
+    await transporter.sendMail({
+        from,
+        to: recipients,
+        subject,
+        html,
+    })
 
     return { sent: true, skipped: false }
 }
