@@ -25,25 +25,29 @@ const buildServiceContactHtml = ({ request }) => `
 
 const sendEmail = async ({ to, subject, html }) => {
     const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
-    const user = process.env.MAIL_USER
-    const pass = process.env.MAIL_PASS
-    const from = process.env.MAIL_FROM || user
+    const from = process.env.MAIL_FROM
+    const host = process.env.SMTP_HOST
+    const port = Number(process.env.SMTP_PORT || 587)
+    const user = process.env.SMTP_USER
+    const pass = process.env.SMTP_PASS
 
     if (recipients.length === 0) {
         return { sent: false, skipped: true, reason: "Sin destinatarios" }
     }
 
-    if (!user || !pass || !from) {
+    if (!host || !user || !pass || !from) {
         console.log("Correo Ferremas no enviado:", {
             to: recipients,
             subject,
-            nota: "Configura MAIL_USER, MAIL_PASS y MAIL_FROM para enviar correos reales.",
+            nota: "Configura SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS y MAIL_FROM para enviar correos reales.",
         })
         return { sent: false, skipped: true, reason: "Email no configurado" }
     }
 
     const transporter = nodemailer.createTransport({
-        service: "gmail",
+        host,
+        port,
+        secure: port === 465,
         auth: {
             user,
             pass,
