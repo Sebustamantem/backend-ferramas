@@ -59,10 +59,12 @@ export const ensureCommerceTables = async () => {
             price NUMERIC(12, 2) NOT NULL DEFAULT 0,
             stock INTEGER NOT NULL DEFAULT 0,
             image_url TEXT,
+            image_urls JSONB NOT NULL DEFAULT '[]'::jsonb,
             category VARCHAR(80),
             created_at TIMESTAMP DEFAULT NOW()
         )
     `)
+    await pool.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB NOT NULL DEFAULT '[]'::jsonb")
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS cart_items (

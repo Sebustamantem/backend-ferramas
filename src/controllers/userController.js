@@ -2,6 +2,7 @@ import pool from "../config/db.js"
 import bcrypt from "bcryptjs"
 import crypto from "crypto"
 import { formatRut, isRutLengthValid } from "../utils/rut.js"
+import { validateStrongPassword } from "../utils/passwordValidation.js"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
 const staffRoles = ["vendedor", "bodeguero", "contador"]
@@ -22,8 +23,8 @@ const resolveProfileUserType = (currentType, requestedType) => {
 }
 
 const generateTemporaryPassword = () => {
-    const random = crypto.randomBytes(6).toString("base64url")
-    return `Ferre${random}1`
+    const random = crypto.randomBytes(9).toString("base64url")
+    return `Ferre-${random}9A!`
 }
 
 export const getAllUsers = async (req, res) => {
@@ -127,6 +128,10 @@ export const createStaffUser = async (req, res) => {
         }
 
         const temporaryPassword = password || generateTemporaryPassword()
+        const passwordValidation = validateStrongPassword(temporaryPassword, { name, lastname, email, rut: formattedRut })
+        if (!passwordValidation.valid) {
+            return res.status(400).json({ code: passwordValidation.code, message: passwordValidation.message })
+        }
         const hashed = await bcrypt.hash(temporaryPassword, 10)
         const result = await pool.query(
             `INSERT INTO users (
@@ -180,7 +185,7 @@ export const updateMyProfile = async (req, res) => {
 
     try {
         const currentResult = await pool.query(
-            "SELECT user_type, business_name, profession, address FROM users WHERE id = $1",
+            "SELECT email, rut, user_type, business_name, profession, address FROM users WHERE id = $1",
             [req.user.id]
         )
         const current = currentResult.rows[0]
@@ -191,6 +196,15 @@ export const updateMyProfile = async (req, res) => {
 
         let query, params
         if (password) {
+            const passwordValidation = validateStrongPassword(password, {
+                name,
+                lastname,
+                email: email || current.email,
+                rut: current.rut,
+            })
+            if (!passwordValidation.valid) {
+                return res.status(400).json({ code: passwordValidation.code, message: passwordValidation.message })
+            }
             const hashed = await bcrypt.hash(password, 10)
             query = "UPDATE users SET name=$1, lastname=$2, email=$3, phone=$4, password=$5, address=$6, user_type=$7, business_name=$8, profession=$9 WHERE id=$10 RETURNING id, name, lastname, email, phone, role, address, user_type, rut, business_name, profession, first_purchase_used"
             params = [name, lastname, email, phone, hashed, addressValue, newType, newBusiness, newProfession, req.user.id]
@@ -208,13 +222,9 @@ export const updateMyProfile = async (req, res) => {
 export const changeMyPassword = async (req, res) => {
     const { password } = req.body
 
-    if (!password || password.length < 8) {
-        return res.status(400).json({ message: "La contraseña debe tener al menos 8 caracteres" })
-    }
-
     try {
         const currentResult = await pool.query(
-            "SELECT id, rut, role FROM users WHERE id = $1",
+            "SELECT id, name, lastname, email, rut, role FROM users WHERE id = $1",
             [req.user.id]
         )
 
@@ -225,6 +235,11 @@ export const changeMyPassword = async (req, res) => {
         const current = currentResult.rows[0]
         if (current.role === "admin" && normalizeRut(password) === normalizeRut(current.rut)) {
             return res.status(400).json({ message: "La nueva contraseña no puede ser tu RUT inicial" })
+        }
+
+        const passwordValidation = validateStrongPassword(password, current)
+        if (!passwordValidation.valid) {
+            return res.status(400).json({ code: passwordValidation.code, message: passwordValidation.message })
         }
 
         const hashed = await bcrypt.hash(password, 10)

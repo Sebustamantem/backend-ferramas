@@ -19,8 +19,8 @@ router.get("/favorites/my", verifyToken, getMyFavoriteProducts)
 router.get("/:id/reviews", getProductReviews)
 router.get("/:id", getProductById)
 router.post("/:id/favorite", verifyToken, toggleFavoriteProduct)
-router.post("/", verifyToken, verifyAdmin, upload.single("image"), createProduct)
-router.put("/:id", verifyToken, verifyAdmin, upload.single("image"), updateProduct)
+router.post("/", verifyToken, verifyAdmin, upload.array("images", 6), createProduct)
+router.put("/:id", verifyToken, verifyAdmin, upload.array("images", 6), updateProduct)
 router.delete("/:id", verifyToken, verifyAdmin, deleteProduct)
 
 export default router

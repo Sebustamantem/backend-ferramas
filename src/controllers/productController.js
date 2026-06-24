@@ -14,8 +14,34 @@ const ensureFavoriteTable = async () => {
     `)
 }
 
+const ensureProductImagesColumn = async () => {
+    await pool.query("ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB NOT NULL DEFAULT '[]'::jsonb")
+}
+
+const getUploadedImageUrls = (req) => {
+    const files = Array.isArray(req.files) ? req.files : req.file ? [req.file] : []
+    return files.map((file) => file.path).filter(Boolean)
+}
+
+const normalizeImages = (imageUrl, imageUrls = []) => {
+    const urls = Array.isArray(imageUrls) ? imageUrls.filter(Boolean) : []
+    if (imageUrl && !urls.includes(imageUrl)) urls.unshift(imageUrl)
+    return [...new Set(urls)]
+}
+
+const parseExistingImageUrls = (value) => {
+    if (!value) return []
+    try {
+        const parsed = JSON.parse(value)
+        return Array.isArray(parsed) ? parsed.filter(Boolean) : []
+    } catch {
+        return []
+    }
+}
+
 export const getProducts = async (req, res) => {
     try {
+        await ensureProductImagesColumn()
         const hasPagination = req.query.page || req.query.limit
         if (!hasPagination) {
             const result = await pool.query("SELECT * FROM products ORDER BY created_at DESC")
@@ -72,6 +98,7 @@ export const getProducts = async (req, res) => {
 export const getProductById = async (req, res) => {
     const { id } = req.params
     try {
+        await ensureProductImagesColumn()
         const result = await pool.query("SELECT * FROM products WHERE id = $1", [id])
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Producto no encontrado" })
@@ -83,11 +110,13 @@ export const getProductById = async (req, res) => {
 
 export const createProduct = async (req, res) => {
     const { name, description, price, stock, category } = req.body
-    const image_url = req.file ? req.file.path : null
+    const imageUrls = getUploadedImageUrls(req)
+    const image_url = imageUrls[0] || null
     try {
+        await ensureProductImagesColumn()
         const result = await pool.query(
-            "INSERT INTO products (name, description, price, stock, image_url, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-            [name, description, price, stock, image_url, category]
+            "INSERT INTO products (name, description, price, stock, image_url, image_urls, category) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
+            [name, description, price, stock, image_url, JSON.stringify(imageUrls), category]
         )
         await logActivity({
             userId: req.user.id,
@@ -107,21 +136,19 @@ export const updateProduct = async (req, res) => {
     const { id } = req.params
     const { name, description, price, stock, category } = req.body
     try {
-        const previous = await pool.query("SELECT stock FROM products WHERE id = $1", [id])
+        await ensureProductImagesColumn()
+        const previous = await pool.query("SELECT stock, image_url, image_urls FROM products WHERE id = $1", [id])
         if (previous.rows.length === 0)
             return res.status(404).json({ message: "Producto no encontrado" })
-        let image_url
-        if (req.file) {
-            image_url = req.file.path
-        } else {
-            const current = await pool.query("SELECT image_url FROM products WHERE id = $1", [id])
-            if (current.rows.length === 0)
-                return res.status(404).json({ message: "Producto no encontrado" })
-            image_url = current.rows[0].image_url
-        }
+        const uploadedImages = getUploadedImageUrls(req)
+        const requestedExistingImages = parseExistingImageUrls(req.body.existing_image_urls)
+        const currentImages = normalizeImages(previous.rows[0].image_url, previous.rows[0].image_urls)
+        const baseImages = requestedExistingImages.length ? requestedExistingImages : currentImages
+        const imageUrls = [...new Set([...baseImages, ...uploadedImages])].slice(0, 6)
+        const image_url = imageUrls[0] || null
         const result = await pool.query(
-            "UPDATE products SET name=$1, description=$2, price=$3, stock=$4, image_url=$5, category=$6 WHERE id=$7 RETURNING *",
-            [name, description, price, stock, image_url, category, id]
+            "UPDATE products SET name=$1, description=$2, price=$3, stock=$4, image_url=$5, image_urls=$6, category=$7 WHERE id=$8 RETURNING *",
+            [name, description, price, stock, image_url, JSON.stringify(imageUrls), category, id]
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Producto no encontrado" })

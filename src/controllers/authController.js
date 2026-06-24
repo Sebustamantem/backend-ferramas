@@ -4,6 +4,8 @@ import jwt from "jsonwebtoken"
 import pool from "../config/db.js"
 import { ensureUsersTable } from "../config/bootstrapAdmin.js"
 import { sendPasswordResetEmail, sendWelcomeEmail } from "../utils/email.js"
+import { validateRegistrationEmail } from "../utils/emailValidation.js"
+import { validateStrongPassword } from "../utils/passwordValidation.js"
 import { formatRut, isRutLengthValid } from "../utils/rut.js"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
@@ -23,16 +25,30 @@ export const register = async (req, res) => {
     const { name, lastname, email, password, rut, phone, user_type, business_name, profession } = req.body
     try {
         await ensureUsersTable()
+        const emailValidation = await validateRegistrationEmail(email)
+        if (!emailValidation.valid) {
+            return errorResponse(res, 400, emailValidation.code, emailValidation.message)
+        }
         if (!isRutLengthValid(rut))
             return res.status(400).json({ message: "RUT invalido" })
         const formattedRut = formatRut(rut)
-        const exists = await pool.query("SELECT id FROM users WHERE email = $1", [email])
+        const exists = await pool.query("SELECT id FROM users WHERE LOWER(email) = LOWER($1)", [emailValidation.email])
         if (exists.rows.length > 0)
             return res.status(400).json({ message: "El email ya está registrado" })
 
         const rutExists = await pool.query("SELECT id FROM users WHERE rut = $1", [formattedRut])
         if (rutExists.rows.length > 0)
             return res.status(400).json({ message: "El RUT ya está registrado" })
+
+        const passwordValidation = validateStrongPassword(password, {
+            name,
+            lastname,
+            email: emailValidation.email,
+            rut: formattedRut,
+        })
+        if (!passwordValidation.valid) {
+            return errorResponse(res, 400, passwordValidation.code, passwordValidation.message)
+        }
 
         const hashed = await bcrypt.hash(password, 10)
         const allowedTypes = ["cliente", "maestro", "pyme"]
@@ -43,7 +59,7 @@ export const register = async (req, res) => {
             `INSERT INTO users (name, lastname, email, password, rut, phone, role, user_type, business_name, profession)
        VALUES ($1, $2, $3, $4, $5, $6, 'cliente', $7, $8, $9)
        RETURNING id, name, lastname, email, phone, rut, role, user_type, business_name, profession, address`,
-            [name, lastname, email, hashed, formattedRut, phone, type, business_name || null, profession || null]
+            [name, lastname, emailValidation.email, hashed, formattedRut, phone, type, business_name || null, profession || null]
         )
 
         const user = result.rows[0]
@@ -116,7 +132,7 @@ export const forgotPassword = async (req, res) => {
         )
 
         if (result.rows.length === 0) {
-            return res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contraseña" })
+            return errorResponse(res, 404, "USER_NOT_REGISTERED", "Este correo no está registrado. Crea una cuenta para continuar.")
         }
 
         const user = result.rows[0]
@@ -169,13 +185,9 @@ export const resetPassword = async (req, res) => {
             return errorResponse(res, 400, "RESET_TOKEN_REQUIRED", "Token invalido")
         }
 
-        if (!password || password.length < 8) {
-            return errorResponse(res, 400, "PASSWORD_TOO_SHORT", "La contraseña debe tener al menos 8 caracteres")
-        }
-
         const tokenHash = hashResetToken(token)
         const result = await pool.query(
-            `SELECT id, role, rut, password_reset_expires
+            `SELECT id, name, lastname, email, role, rut, password_reset_expires
              FROM users
              WHERE password_reset_token=$1
              LIMIT 1`,
@@ -202,6 +214,11 @@ export const resetPassword = async (req, res) => {
 
         if (user.role === "admin" && normalizeRut(password) === normalizeRut(user.rut)) {
             return errorResponse(res, 400, "PASSWORD_EQUALS_RUT", "La nueva contraseña no puede ser el RUT")
+        }
+
+        const passwordValidation = validateStrongPassword(password, user)
+        if (!passwordValidation.valid) {
+            return errorResponse(res, 400, passwordValidation.code, passwordValidation.message)
         }
 
         const hashed = await bcrypt.hash(password, 10)

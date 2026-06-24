@@ -455,6 +455,7 @@ export const getMyInstallments = async (req, res) => {
 export const payInstallment = async (req, res) => {
     const { installmentId } = req.params
     const client = await pool.connect()
+    let transactionFinished = false
     try {
         await client.query("BEGIN")
 
@@ -504,6 +505,7 @@ export const payInstallment = async (req, res) => {
         )
 
         await client.query("COMMIT")
+        transactionFinished = true
         await logActivity({
             userId: req.user.id,
             action: "ferrecredit_installment_paid",
@@ -512,25 +514,33 @@ export const payInstallment = async (req, res) => {
             description: "Admin registro pago de cuota FerreCredito",
             metadata: { amount: paymentAmount, paid_installments: newPaid },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+
         if (newStatus === "active") {
-            const user = await pool.query(
-                "SELECT name, lastname, email FROM users WHERE id=$1",
-                [inst.user_id]
-            )
-            if (user.rows[0]?.email) {
-                sendUpcomingInstallmentEmail({
-                    to: user.rows[0].email,
-                    name: getDisplayName(user.rows[0]),
-                    installment: updatedInstallment.rows[0],
-                }).catch((emailErr) => console.error("Error enviando proxima cuota:", emailErr.message))
-            }
+            Promise.resolve()
+                .then(async () => {
+                    const user = await pool.query(
+                        "SELECT name, lastname, email FROM users WHERE id=$1",
+                        [inst.user_id]
+                    )
+                    if (user.rows[0]?.email) {
+                        await sendUpcomingInstallmentEmail({
+                            to: user.rows[0].email,
+                            name: getDisplayName(user.rows[0]),
+                            installment: updatedInstallment.rows[0],
+                        })
+                    }
+                })
+                .catch((emailErr) => console.error("Error enviando proxima cuota:", emailErr.message))
         }
-        res.json({ message: "Cuota pagada correctamente" })
+
+        return res.json({ message: "Cuota pagada correctamente" })
     } catch (err) {
-        try {
-            await client.query("ROLLBACK")
-        } catch (rollbackErr) {
-            console.error("Error al revertir pago FerreCredito (payInstallment):", rollbackErr)
+        if (!transactionFinished) {
+            try {
+                await client.query("ROLLBACK")
+            } catch (rollbackErr) {
+                console.error("Error al revertir pago FerreCredito (payInstallment):", rollbackErr)
+            }
         }
         console.error("Error al registrar pago (payInstallment):", err)
         res.status(500).json({ message: "Error al registrar pago", error: err.message })
