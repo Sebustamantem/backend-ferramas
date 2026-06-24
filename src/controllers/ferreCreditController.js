@@ -137,12 +137,57 @@ export const rejectCreditApplication = async (req, res) => {
 export const getMyCredit = async (req, res) => {
     try {
         const result = await pool.query(
-            "SELECT * FROM ferre_credits WHERE user_id = $1",
+            `SELECT fc.*, u.user_type
+             FROM users u
+             LEFT JOIN ferre_credits fc ON fc.user_id = u.id
+             WHERE u.id = $1`,
             [req.user.id]
         )
-        if (result.rows.length === 0)
-            return res.json({ credit_limit: 0, balance_used: 0, is_active: false })
-        res.json(result.rows[0])
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "Usuario no encontrado" })
+        }
+
+        const row = result.rows[0]
+        const hasCredit = Boolean(row.id)
+        const isPending = ["maestro_pending", "pyme_pending"].includes(row.user_type)
+        const isApprovedProfessional = ["maestro", "pyme"].includes(row.user_type)
+        const creditLimit = Number(row.credit_limit || 0)
+        const balanceUsed = Number(row.balance_used || 0)
+        const available = Math.max(creditLimit - balanceUsed, 0)
+
+        let applicationStatus = "not_requested"
+        let statusReason = "Aun no tienes una postulacion FerreCredito."
+
+        if (isPending) {
+            applicationStatus = "pending"
+            statusReason = "Tu postulacion esta pendiente de aprobacion del administrador."
+        } else if (isApprovedProfessional && row.is_active) {
+            applicationStatus = "approved"
+            statusReason = available > 0
+                ? "Puedes usar tu cupo disponible en el checkout."
+                : "No tienes cupo disponible para nuevas compras."
+        } else if (isApprovedProfessional && hasCredit) {
+            applicationStatus = "inactive"
+            statusReason = "Tu linea existe, pero el administrador la dejo inactiva."
+        } else if (hasCredit && !row.is_active) {
+            applicationStatus = "rejected"
+            statusReason = "Tu postulacion fue rechazada o desactivada por administracion."
+        }
+
+        res.json({
+            id: row.id || null,
+            user_id: req.user.id,
+            user_type: row.user_type,
+            credit_limit: creditLimit,
+            balance_used: balanceUsed,
+            available,
+            is_active: Boolean(row.is_active),
+            application_status: applicationStatus,
+            status_reason: statusReason,
+            can_buy: applicationStatus === "approved" && available > 0,
+            created_at: row.created_at || null,
+            updated_at: row.updated_at || null,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener crédito", error: err.message })
     }
@@ -435,7 +480,12 @@ export const payInstallment = async (req, res) => {
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         res.json({ message: "Cuota pagada correctamente" })
     } catch (err) {
-        await client.query("ROLLBACK")
+        try {
+            await client.query("ROLLBACK")
+        } catch (rollbackErr) {
+            console.error("Error al revertir pago FerreCredito (payInstallment):", rollbackErr)
+        }
+        console.error("Error al registrar pago (payInstallment):", err)
         res.status(500).json({ message: "Error al registrar pago", error: err.message })
     } finally {
         client.release()

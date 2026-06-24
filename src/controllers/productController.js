@@ -16,8 +16,54 @@ const ensureFavoriteTable = async () => {
 
 export const getProducts = async (req, res) => {
     try {
-        const result = await pool.query("SELECT * FROM products ORDER BY created_at DESC")
-        res.json(result.rows)
+        const hasPagination = req.query.page || req.query.limit
+        if (!hasPagination) {
+            const result = await pool.query("SELECT * FROM products ORDER BY created_at DESC")
+            return res.json(result.rows)
+        }
+
+        const page = Math.max(Number(req.query.page || 1), 1)
+        const limit = Math.min(Math.max(Number(req.query.limit || 20), 1), 100)
+        const offset = (page - 1) * limit
+        const search = String(req.query.search || "").trim()
+        const category = String(req.query.category || "").trim()
+        const sort = String(req.query.sort || "newest")
+
+        const where = []
+        const params = []
+
+        if (search) {
+            params.push(`%${search}%`)
+            where.push(`(name ILIKE $${params.length} OR description ILIKE $${params.length} OR category ILIKE $${params.length})`)
+        }
+
+        if (category) {
+            params.push(category)
+            where.push(`LOWER(category) = LOWER($${params.length})`)
+        }
+
+        const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : ""
+        const orderSql = {
+            price_asc: "price ASC",
+            price_desc: "price DESC",
+            newest: "created_at DESC",
+        }[sort] || "created_at DESC"
+
+        const countResult = await pool.query(`SELECT COUNT(*)::int as total FROM products ${whereSql}`, params)
+        const dataResult = await pool.query(
+            `SELECT * FROM products ${whereSql} ORDER BY ${orderSql} LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+            [...params, limit, offset]
+        )
+
+        res.json({
+            data: dataResult.rows,
+            pagination: {
+                page,
+                limit,
+                total: Number(countResult.rows[0]?.total || 0),
+                total_pages: Math.max(Math.ceil(Number(countResult.rows[0]?.total || 0) / limit), 1),
+            },
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener productos", error: err.message })
     }
