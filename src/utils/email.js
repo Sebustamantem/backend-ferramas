@@ -35,6 +35,63 @@ const getFrontendUrl = () => (process.env.FRONTEND_URL || "https://frontend-ferr
 
 const getLogoUrl = () => `${getFrontendUrl()}/images/Logo.png`
 
+const formatCurrency = (value = 0) => `$${Number(value || 0).toLocaleString("es-CL")}`
+
+const formatDate = (value) => {
+    if (!value) return "Por definir"
+    return new Intl.DateTimeFormat("es-CL", { dateStyle: "long" }).format(new Date(value))
+}
+
+const orderStatusLabels = {
+    pending: "Pendiente de pago",
+    transfer_pending: "Transferencia pendiente",
+    paid: "Pagado",
+    processing: "En preparación",
+    shipped: "Despachado",
+    delivered: "Entregado",
+    cancelled: "Cancelado",
+}
+
+const baseEmailHtml = ({ eyebrow, title, children }) => `
+    <div style="margin:0;padding:0;background:#f3f6f5;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+        <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
+            <div style="background:#ffffff;border:1px solid #d9e4df;border-radius:16px;overflow:hidden;box-shadow:0 10px 30px rgba(15,23,42,0.08);">
+                <div style="background:#0f766e;padding:24px 28px;text-align:center;">
+                    <img src="${getLogoUrl()}" alt="FERREMAS" width="86" style="display:block;margin:0 auto 10px;max-width:86px;height:auto;border:0;" />
+                    <div style="font-size:24px;font-weight:800;letter-spacing:1px;color:#ffffff;">FERREMAS</div>
+                    <div style="font-size:13px;color:#ccfbf1;margin-top:6px;">${eyebrow}</div>
+                </div>
+
+                <div style="padding:32px 28px;">
+                    <h1 style="margin:0 0 14px;font-size:24px;line-height:1.25;color:#111827;">${title}</h1>
+                    ${children}
+                </div>
+            </div>
+
+            <p style="margin:18px 0 0;text-align:center;font-size:12px;color:#6b7280;">
+                FERREMAS - Herramientas, construcción y servicios para tu hogar.
+            </p>
+        </div>
+    </div>
+`
+
+const orderItemsHtml = (items = []) => {
+    if (!items.length) return ""
+
+    return `
+        <div style="margin:20px 0;border-top:1px solid #e5e7eb;">
+            ${items.map((item) => `
+                <div style="padding:12px 0;border-bottom:1px solid #e5e7eb;">
+                    <strong>${item.name || "Producto"}</strong><br />
+                    <span style="font-size:13px;color:#6b7280;">
+                        Cantidad: ${item.quantity || 1} - Precio: ${formatCurrency(item.price)}
+                    </span>
+                </div>
+            `).join("")}
+        </div>
+    `
+}
+
 const sendEmail = async ({ to, subject, html }) => {
     const recipients = Array.isArray(to) ? to.filter(Boolean) : [to].filter(Boolean)
     const from = process.env.MAIL_FROM
@@ -86,7 +143,122 @@ export const sendServiceContactEmail = async ({ request, orderId }) => {
     })
 }
 
-export const sendPasswordResetEmail = async ({ to, name, resetUrl }) => {
+export const sendWelcomeEmail = async ({ to, name, userType }) => sendEmail({
+    to,
+    subject: "Bienvenido a FERREMAS",
+    html: baseEmailHtml({
+        eyebrow: "Cuenta creada",
+        title: `Hola ${name || "cliente"}, bienvenido a FERREMAS`,
+        children: `
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#374151;">
+                Tu cuenta fue creada correctamente. Ya puedes comprar herramientas, revisar tus pedidos y gestionar tus datos.
+            </p>
+            ${["maestro_pending", "pyme_pending"].includes(userType) ? `
+                <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px;margin-top:18px;">
+                    <p style="margin:0;font-size:14px;line-height:1.6;color:#9a3412;">
+                        Tu postulación profesional quedó pendiente de revisión. Te avisaremos por correo cuando sea aprobada o rechazada.
+                    </p>
+                </div>
+            ` : ""}
+        `,
+    }),
+})
+
+export const sendOrderConfirmationEmail = async ({ to, name, order, items = [], paymentMethod = "Compra" }) => sendEmail({
+    to,
+    subject: `Confirmación de compra FERREMAS #${order.id}`,
+    html: baseEmailHtml({
+        eyebrow: "Confirmación de compra",
+        title: `Recibimos tu pedido #${order.id}`,
+        children: `
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#374151;">
+                Hola ${name || "cliente"}, tu pedido fue registrado correctamente.
+            </p>
+            <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;">
+                <p style="margin:0;font-size:14px;line-height:1.7;color:#374151;">
+                    <strong>Estado:</strong> ${orderStatusLabels[order.status] || order.status}<br />
+                    <strong>Método:</strong> ${paymentMethod}<br />
+                    <strong>Total:</strong> ${formatCurrency(order.total)}
+                </p>
+            </div>
+            ${orderItemsHtml(items)}
+        `,
+    }),
+})
+
+export const sendOrderStatusEmail = async ({ to, name, order, status }) => sendEmail({
+    to,
+    subject: `Actualización de pedido FERREMAS #${order.id}`,
+    html: baseEmailHtml({
+        eyebrow: "Estado de pedido",
+        title: `Tu pedido #${order.id} está ${orderStatusLabels[status] || status}`,
+        children: `
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#374151;">
+                Hola ${name || "cliente"}, actualizamos el estado de tu pedido.
+            </p>
+            <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;">
+                <p style="margin:0;font-size:14px;line-height:1.7;color:#374151;">
+                    <strong>Pedido:</strong> #${order.id}<br />
+                    <strong>Estado actual:</strong> ${orderStatusLabels[status] || status}<br />
+                    <strong>Total:</strong> ${formatCurrency(order.total)}
+                </p>
+            </div>
+        `,
+    }),
+})
+
+export const sendFerreCreditStatusEmail = async ({ to, name, approved, creditLimit = 0 }) => sendEmail({
+    to,
+    subject: approved ? "Tu FerreCrédito fue aprobado" : "Tu postulación FerreCrédito fue rechazada",
+    html: baseEmailHtml({
+        eyebrow: "FerreCrédito",
+        title: approved ? "FerreCrédito aprobado" : "Postulación rechazada",
+        children: approved ? `
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#374151;">
+                Hola ${name || "cliente"}, tu línea FerreCrédito fue aprobada.
+            </p>
+            <div style="background:#ecfdf5;border:1px solid #99f6e4;border-radius:12px;padding:14px 16px;">
+                <p style="margin:0;font-size:14px;line-height:1.7;color:#115e59;">
+                    <strong>Cupo aprobado:</strong> ${formatCurrency(creditLimit)}<br />
+                    Ya puedes usarlo en el checkout si tienes cupo disponible.
+                </p>
+            </div>
+        ` : `
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#374151;">
+                Hola ${name || "cliente"}, revisamos tu postulación FerreCrédito y por ahora no fue aprobada.
+            </p>
+            <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:14px 16px;">
+                <p style="margin:0;font-size:14px;line-height:1.7;color:#991b1b;">
+                    Si necesitas más información, puedes contactar al equipo FERREMAS.
+                </p>
+            </div>
+        `,
+    }),
+})
+
+export const sendUpcomingInstallmentEmail = async ({ to, name, installment }) => sendEmail({
+    to,
+    subject: `Próxima cuota FerreCrédito - Pedido #${installment.order_id}`,
+    html: baseEmailHtml({
+        eyebrow: "Próxima cuota",
+        title: "Tienes una próxima cuota FerreCrédito",
+        children: `
+            <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#374151;">
+                Hola ${name || "cliente"}, te dejamos el detalle de tu próxima cuota.
+            </p>
+            <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px;">
+                <p style="margin:0;font-size:14px;line-height:1.7;color:#9a3412;">
+                    <strong>Pedido:</strong> #${installment.order_id}<br />
+                    <strong>Cuota:</strong> ${Number(installment.paid_installments || 0) + 1} de ${installment.installments}<br />
+                    <strong>Monto:</strong> ${formatCurrency(installment.amount_per_installment)}<br />
+                    <strong>Vence:</strong> ${formatDate(installment.due_date)}
+                </p>
+            </div>
+        `,
+    }),
+})
+
+export const sendPasswordResetEmail = async ({ to, name, resetUrl, expiresInMinutes = 30 }) => {
     const logoUrl = getLogoUrl()
 
     return sendEmail({
@@ -116,7 +288,7 @@ export const sendPasswordResetEmail = async ({ to, name, resetUrl }) => {
 
                             <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:12px;padding:14px 16px;margin:0 0 20px;">
                                 <p style="margin:0;font-size:14px;line-height:1.6;color:#9a3412;">
-                                    Este enlace vence en 1 hora. Si no solicitaste este cambio, puedes ignorar este correo.
+                                    Este enlace vence en ${expiresInMinutes} minutos. Si no solicitaste este cambio, puedes ignorar este correo.
                                 </p>
                             </div>
 

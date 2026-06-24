@@ -3,11 +3,16 @@ import crypto from "crypto"
 import jwt from "jsonwebtoken"
 import pool from "../config/db.js"
 import { ensureUsersTable } from "../config/bootstrapAdmin.js"
-import { sendPasswordResetEmail } from "../utils/email.js"
+import { sendPasswordResetEmail, sendWelcomeEmail } from "../utils/email.js"
 import { formatRut, isRutLengthValid } from "../utils/rut.js"
 
 const normalizeRut = (rut = "") => String(rut).replace(/[^0-9kK]/g, "").toLowerCase()
 const hashResetToken = (token) => crypto.createHash("sha256").update(token).digest("hex")
+const PASSWORD_RESET_EXPIRES_MINUTES = 30
+const PASSWORD_RESET_EXPIRES_MS = PASSWORD_RESET_EXPIRES_MINUTES * 60 * 1000
+
+const errorResponse = (res, status, code, message, extra = {}) =>
+    res.status(status).json({ code, message, ...extra })
 
 const buildPasswordResetUrl = (token) => {
     const frontendUrl = process.env.FRONTEND_URL || process.env.CLIENT_URL || "http://localhost:5173"
@@ -43,6 +48,11 @@ export const register = async (req, res) => {
 
         const user = result.rows[0]
         const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" })
+        sendWelcomeEmail({
+            to: user.email,
+            name: user.name,
+            userType: user.user_type,
+        }).catch((emailErr) => console.error("Error enviando bienvenida:", emailErr.message))
         res.status(201).json({ user, token })
     } catch (err) {
         res.status(500).json({ message: "Error en el servidor", error: err.message })
@@ -97,7 +107,7 @@ export const forgotPassword = async (req, res) => {
         await ensureUsersTable()
 
         if (!email) {
-            return res.status(400).json({ message: "Ingresa tu correo" })
+            return errorResponse(res, 400, "EMAIL_REQUIRED", "Ingresa tu correo")
         }
 
         const result = await pool.query(
@@ -112,7 +122,7 @@ export const forgotPassword = async (req, res) => {
         const user = result.rows[0]
         const token = crypto.randomBytes(32).toString("hex")
         const tokenHash = hashResetToken(token)
-        const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
+        const expiresAt = new Date(Date.now() + PASSWORD_RESET_EXPIRES_MS)
 
         await pool.query(
             `UPDATE users
@@ -127,11 +137,11 @@ export const forgotPassword = async (req, res) => {
                 to: user.email,
                 name: user.name,
                 resetUrl: buildPasswordResetUrl(token),
+                expiresInMinutes: PASSWORD_RESET_EXPIRES_MINUTES,
             })
         } catch (emailError) {
             console.error("Error enviando correo recuperacion:", emailError.message)
-            return res.status(502).json({
-                message: "No se pudo enviar el correo de recuperacion",
+            return errorResponse(res, 502, "EMAIL_SEND_FAILED", "No se pudo enviar el correo de recuperacion", {
                 error: emailError.message,
             })
         }
@@ -144,7 +154,7 @@ export const forgotPassword = async (req, res) => {
 
         res.json({ message: "Si el correo existe, enviaremos instrucciones para recuperar la contraseña" })
     } catch (err) {
-        res.status(500).json({ message: "Error en el servidor", error: err.message })
+        errorResponse(res, 500, "SERVER_ERROR", "Error en el servidor", { error: err.message })
     }
 }
 
@@ -156,30 +166,42 @@ export const resetPassword = async (req, res) => {
         await ensureUsersTable()
 
         if (!token) {
-            return res.status(400).json({ message: "Token invalido" })
+            return errorResponse(res, 400, "RESET_TOKEN_REQUIRED", "Token invalido")
         }
 
         if (!password || password.length < 8) {
-            return res.status(400).json({ message: "La contraseña debe tener al menos 8 caracteres" })
+            return errorResponse(res, 400, "PASSWORD_TOO_SHORT", "La contraseña debe tener al menos 8 caracteres")
         }
 
         const tokenHash = hashResetToken(token)
         const result = await pool.query(
-            `SELECT id, role, rut
+            `SELECT id, role, rut, password_reset_expires
              FROM users
              WHERE password_reset_token=$1
-               AND password_reset_expires > NOW()
              LIMIT 1`,
             [tokenHash]
         )
 
         if (result.rows.length === 0) {
-            return res.status(400).json({ message: "El enlace es invalido o expiro" })
+            return errorResponse(res, 404, "RESET_TOKEN_NOT_FOUND", "El enlace es invalido")
         }
 
         const user = result.rows[0]
+        const expiresAt = user.password_reset_expires ? new Date(user.password_reset_expires) : null
+        if (!expiresAt || expiresAt <= new Date()) {
+            await pool.query(
+                `UPDATE users
+                 SET password_reset_token=NULL,
+                     password_reset_expires=NULL
+                 WHERE id=$1`,
+                [user.id]
+            )
+
+            return errorResponse(res, 410, "RESET_TOKEN_EXPIRED", "El enlace expiro. Solicita uno nuevo.")
+        }
+
         if (user.role === "admin" && normalizeRut(password) === normalizeRut(user.rut)) {
-            return res.status(400).json({ message: "La nueva contraseña no puede ser el RUT" })
+            return errorResponse(res, 400, "PASSWORD_EQUALS_RUT", "La nueva contraseña no puede ser el RUT")
         }
 
         const hashed = await bcrypt.hash(password, 10)
@@ -195,6 +217,6 @@ export const resetPassword = async (req, res) => {
 
         res.json({ message: "Contraseña actualizada correctamente" })
     } catch (err) {
-        res.status(500).json({ message: "Error en el servidor", error: err.message })
+        errorResponse(res, 500, "SERVER_ERROR", "Error en el servidor", { error: err.message })
     }
 }

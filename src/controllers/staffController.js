@@ -5,6 +5,29 @@ import { cancelServiceRequestsForOrder, ensureServiceTables, markServiceRequests
 import { ensureSurveyTable } from "./surveyController.js"
 import { ensureActivityLogTable, getActivityLogs, getRecentActivityLogs, logActivity } from "../utils/activityLog.js"
 import { cancelExpiredPendingOrders } from "../utils/pendingOrders.js"
+import { sendOrderStatusEmail } from "../utils/email.js"
+
+const getDisplayName = (user = {}) => [user.name, user.lastname].filter(Boolean).join(" ").trim() || user.email
+
+const notifyOrderStatus = async (orderId, status) => {
+    const result = await pool.query(
+        `SELECT o.id, o.total, o.status, o.delivery_method, o.created_at,
+                u.name, u.lastname, u.email
+         FROM orders o
+         LEFT JOIN users u ON u.id = o.user_id
+         WHERE o.id=$1`,
+        [orderId]
+    )
+    const row = result.rows[0]
+    if (!row?.email) return
+
+    await sendOrderStatusEmail({
+        to: row.email,
+        name: getDisplayName(row),
+        order: row,
+        status,
+    })
+}
 
 const ensureStockReportsTable = async () => {
     await pool.query(`
@@ -457,6 +480,8 @@ export const updateOrderStatus = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Orden no encontrada" })
+        notifyOrderStatus(result.rows[0].id, status)
+            .catch((emailErr) => console.error("Error enviando estado de pedido:", emailErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar estado", error: err.message })
@@ -829,6 +854,8 @@ export const dispatchOrder = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(400).json({ message: "El pedido no está en estado processing" })
+        notifyOrderStatus(result.rows[0].id, "shipped")
+            .catch((emailErr) => console.error("Error enviando despacho:", emailErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al despachar pedido", error: err.message })
@@ -865,6 +892,8 @@ export const updateWarehouseOrderStatus = async (req, res) => {
             description: `Bodega cambio pedido a ${status}`,
             metadata: { status },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        notifyOrderStatus(result.rows[0].id, status)
+            .catch((emailErr) => console.error("Error enviando estado bodega:", emailErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar estado del pedido", error: err.message })
@@ -924,6 +953,8 @@ export const confirmTransferOrder = async (req, res) => {
             entityId: Number(id),
             description: "Contador confirmo transferencia",
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        notifyOrderStatus(result.rows[0].id, "paid")
+            .catch((emailErr) => console.error("Error enviando transferencia confirmada:", emailErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al confirmar transferencia", error: err.message })
@@ -977,6 +1008,8 @@ export const rejectTransferOrder = async (req, res) => {
             entityId: Number(id),
             description: "Contador rechazo transferencia",
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        notifyOrderStatus(result.rows[0].id, "cancelled")
+            .catch((emailErr) => console.error("Error enviando transferencia rechazada:", emailErr.message))
         res.json(result.rows[0])
     } catch (err) {
         await client.query("ROLLBACK")
@@ -1005,6 +1038,8 @@ export const registerDeliveredOrder = async (req, res) => {
             entityId: Number(id),
             description: "Contador registro pedido entregado",
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        notifyOrderStatus(result.rows[0].id, "delivered")
+            .catch((emailErr) => console.error("Error enviando entrega:", emailErr.message))
         res.json(result.rows[0])
     } catch (err) {
         res.status(500).json({ message: "Error al registrar entrega", error: err.message })

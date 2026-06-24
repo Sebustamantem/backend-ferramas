@@ -3,12 +3,19 @@ import { releaseExpiredReservations } from "./cartController.js"
 import { addPointsForOrder, ensurePointsTables, usePointsForOrder } from "./pointsController.js"
 import { clearServiceCart, createServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
 import { logActivity } from "../utils/activityLog.js"
+import {
+    sendFerreCreditStatusEmail,
+    sendOrderConfirmationEmail,
+    sendUpcomingInstallmentEmail,
+} from "../utils/email.js"
 
 const getApprovedProfessionalType = (userType) => {
     if (userType === "maestro_pending") return "maestro"
     if (userType === "pyme_pending") return "pyme"
     return userType
 }
+
+const getDisplayName = (user = {}) => [user.name, user.lastname].filter(Boolean).join(" ").trim() || user.email
 
 export const setCredit = async (req, res) => {
     const { userId } = req.params
@@ -21,7 +28,7 @@ export const setCredit = async (req, res) => {
     try {
         await client.query("BEGIN")
         const user = await client.query(
-            "SELECT id, role, user_type FROM users WHERE id = $1",
+            "SELECT id, name, lastname, email, role, user_type FROM users WHERE id = $1",
             [userId]
         )
         if (user.rows.length === 0) {
@@ -72,6 +79,12 @@ export const setCredit = async (req, res) => {
             description: "Admin aprobo o actualizo FerreCredito",
             metadata: { credit_limit: limit, is_active },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        sendFerreCreditStatusEmail({
+            to: user.rows[0].email,
+            name: getDisplayName(user.rows[0]),
+            approved: is_active !== false && is_active !== "false",
+            creditLimit: limit,
+        }).catch((emailErr) => console.error("Error enviando correo FerreCredito:", emailErr.message))
         res.json(result.rows[0])
     } catch (err) {
         try {
@@ -92,7 +105,7 @@ export const rejectCreditApplication = async (req, res) => {
     try {
         await client.query("BEGIN")
         const user = await client.query(
-            "SELECT id, user_type FROM users WHERE id=$1",
+            "SELECT id, name, lastname, email, user_type FROM users WHERE id=$1",
             [userId]
         )
 
@@ -121,6 +134,11 @@ export const rejectCreditApplication = async (req, res) => {
             entityId: Number(userId),
             description: "Admin rechazo postulacion FerreCredito",
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        sendFerreCreditStatusEmail({
+            to: user.rows[0].email,
+            name: getDisplayName(user.rows[0]),
+            approved: false,
+        }).catch((emailErr) => console.error("Error enviando rechazo FerreCredito:", emailErr.message))
         res.json({ message: "Postulacion rechazada" })
     } catch (err) {
         try {
@@ -335,10 +353,11 @@ export const payWithCredit = async (req, res) => {
         orderIdToNotify = order.id
 
         const amountPerInstallment = Math.round(finalTotal / installments)
-        await client.query(
+        const installmentResult = await client.query(
             `INSERT INTO ferre_credit_installments
        (user_id, order_id, total_amount, installments, amount_per_installment, due_date)
-       VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '30 days')`,
+       VALUES ($1, $2, $3, $4, $5, NOW() + INTERVAL '30 days')
+       RETURNING *`,
             [req.user.id, order.id, finalTotal, installments, amountPerInstallment]
         )
 
@@ -370,6 +389,20 @@ export const payWithCredit = async (req, res) => {
                 console.error("Error al notificar servicios pagados:", notifyErr.message)
             }
         }
+
+        sendOrderConfirmationEmail({
+            to: user.email,
+            name: getDisplayName(user),
+            order: { ...order, total: finalTotal, status: "paid" },
+            items: cartItems.rows,
+            paymentMethod: "FerreCredito",
+        }).catch((emailErr) => console.error("Error enviando confirmacion FerreCredito:", emailErr.message))
+
+        sendUpcomingInstallmentEmail({
+            to: user.email,
+            name: getDisplayName(user),
+            installment: installmentResult.rows[0],
+        }).catch((emailErr) => console.error("Error enviando aviso de cuota:", emailErr.message))
 
         res.json({
             message: "Compra realizada con FerreCredito",
@@ -451,7 +484,7 @@ export const payInstallment = async (req, res) => {
 
         const newPaid = inst.paid_installments + 1
         const newStatus = newPaid >= inst.installments ? "completed" : "active"
-        await client.query(
+        const updatedInstallment = await client.query(
             `UPDATE ferre_credit_installments
        SET paid_installments = $1,
            status = $2,
@@ -459,7 +492,8 @@ export const payInstallment = async (req, res) => {
                 WHEN $2 = 'completed' THEN due_date
                 ELSE COALESCE(due_date, NOW()) + INTERVAL '30 days'
            END
-       WHERE id = $3`,
+       WHERE id = $3
+       RETURNING *`,
             [newPaid, newStatus, installmentId]
         )
 
@@ -478,6 +512,19 @@ export const payInstallment = async (req, res) => {
             description: "Admin registro pago de cuota FerreCredito",
             metadata: { amount: paymentAmount, paid_installments: newPaid },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
+        if (newStatus === "active") {
+            const user = await pool.query(
+                "SELECT name, lastname, email FROM users WHERE id=$1",
+                [inst.user_id]
+            )
+            if (user.rows[0]?.email) {
+                sendUpcomingInstallmentEmail({
+                    to: user.rows[0].email,
+                    name: getDisplayName(user.rows[0]),
+                    installment: updatedInstallment.rows[0],
+                }).catch((emailErr) => console.error("Error enviando proxima cuota:", emailErr.message))
+            }
+        }
         res.json({ message: "Cuota pagada correctamente" })
     } catch (err) {
         try {

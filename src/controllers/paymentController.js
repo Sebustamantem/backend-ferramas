@@ -9,6 +9,7 @@ import {
     ensureServiceTables,
     markServiceRequestsPaid,
 } from "./serviceController.js"
+import { sendOrderConfirmationEmail } from "../utils/email.js"
 import "dotenv/config"
 
 const tx = new WebpayPlus.Transaction(
@@ -20,6 +21,8 @@ const tx = new WebpayPlus.Transaction(
 )
 
 const buildFrontendRoute = (frontendUrl, path) => `${frontendUrl.replace(/\/$/, "")}${path}`
+
+const getDisplayName = (user = {}) => [user.name, user.lastname].filter(Boolean).join(" ").trim() || user.email
 
 export const createTransaction = async (req, res) => {
     const { address, points_to_use = 0, delivery_method = "delivery" } = req.body
@@ -232,7 +235,19 @@ export const createTransferOrder = async (req, res) => {
         await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.user.id])
         await client.query(`DELETE FROM stock_reservations WHERE user_id = $1`, [req.user.id])
         await clearServiceCart(client, req.user.id, false)
+        const userResult = await client.query(
+            "SELECT name, lastname, email FROM users WHERE id=$1",
+            [req.user.id]
+        )
         await client.query("COMMIT")
+
+        sendOrderConfirmationEmail({
+            to: userResult.rows[0]?.email,
+            name: getDisplayName(userResult.rows[0]),
+            order: { ...order, total: finalTotal },
+            items: cartItems.rows,
+            paymentMethod: "Transferencia bancaria",
+        }).catch((emailErr) => console.error("Error enviando confirmacion transferencia:", emailErr.message))
 
         return res.status(201).json({
             order_id: order.id,
@@ -295,9 +310,10 @@ export const confirmTransaction = async (req, res) => {
             )
 
             const items = await pool.query(
-                `SELECT product_id, quantity, price
-                 FROM order_items
-                 WHERE order_id = $1`,
+                `SELECT oi.product_id, oi.quantity, oi.price, p.name
+                 FROM order_items oi
+                 LEFT JOIN products p ON p.id = oi.product_id
+                 WHERE oi.order_id = $1`,
                 [orderId]
             )
 
@@ -329,6 +345,18 @@ export const confirmTransaction = async (req, res) => {
                 0
             )
             await addPointsForOrder(pool, order.user_id, orderId, productPointsTotal)
+
+            const userResult = await pool.query(
+                "SELECT name, lastname, email FROM users WHERE id=$1",
+                [order.user_id]
+            )
+            sendOrderConfirmationEmail({
+                to: userResult.rows[0]?.email,
+                name: getDisplayName(userResult.rows[0]),
+                order: { ...order, status: "paid" },
+                items: items.rows,
+                paymentMethod: "Webpay",
+            }).catch((emailErr) => console.error("Error enviando confirmacion Webpay:", emailErr.message))
 
             return res.redirect(buildFrontendRoute(frontendUrl, `/checkout/success?order_id=${orderId}`))
         }
