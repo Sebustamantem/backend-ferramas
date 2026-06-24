@@ -1,4 +1,6 @@
+import { WebpayPlus, Options, IntegrationApiKeys, IntegrationCommerceCodes, Environment } from "transbank-sdk"
 import pool from "../config/db.js"
+import { ensureCommerceTables } from "../config/bootstrapAdmin.js"
 import { releaseExpiredReservations } from "./cartController.js"
 import { addPointsForOrder, ensurePointsTables, usePointsForOrder } from "./pointsController.js"
 import { clearServiceCart, createServiceRequestsForOrder, ensureServiceTables, markServiceRequestsPaid } from "./serviceController.js"
@@ -9,6 +11,16 @@ import {
     sendUpcomingInstallmentEmail,
 } from "../utils/email.js"
 
+const tx = new WebpayPlus.Transaction(
+    new Options(
+        IntegrationCommerceCodes.WEBPAY_PLUS,
+        IntegrationApiKeys.WEBPAY,
+        Environment.Integration
+    )
+)
+
+const buildFrontendRoute = (frontendUrl, path) => `${frontendUrl.replace(/\/$/, "")}${path}`
+
 const getApprovedProfessionalType = (userType) => {
     if (userType === "maestro_pending") return "maestro"
     if (userType === "pyme_pending") return "pyme"
@@ -16,6 +28,20 @@ const getApprovedProfessionalType = (userType) => {
 }
 
 const getDisplayName = (user = {}) => [user.name, user.lastname].filter(Boolean).join(" ").trim() || user.email
+
+const getInstallmentDebt = (installment) => {
+    const totalAmount = Number(installment.total_amount || 0)
+    const paidAmount = Math.max(
+        Number(installment.paid_amount || 0),
+        Number(installment.paid_installments || 0) * Number(installment.amount_per_installment || 0)
+    )
+    return Math.max(totalAmount - paidAmount, 0)
+}
+
+const calculatePaidInstallments = (paidAmount, amountPerInstallment, installments) => {
+    if (!amountPerInstallment) return 0
+    return Math.min(Math.floor(Number(paidAmount || 0) / Number(amountPerInstallment || 1)), Number(installments || 0))
+}
 
 export const setCredit = async (req, res) => {
     const { userId } = req.params
@@ -227,9 +253,19 @@ export const getAllCredits = async (req, res) => {
 
 export const getAllInstallments = async (req, res) => {
     try {
+        await ensureCommerceTables()
         const result = await pool.query(
             `SELECT fci.*, u.name as user_name, u.email as user_email,
                     CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM ferre_credit_payments fcp
+                            WHERE fcp.installment_id=fci.id AND fcp.status='pending'
+                        )
+                        THEN 'webpay_pending'
+                        WHEN fci.status='active'
+                         AND fci.payment_requested_at IS NOT NULL
+                         AND fci.paid_installments < fci.installments
+                        THEN 'payment_pending'
                         WHEN fci.status='active'
                          AND fci.due_date IS NOT NULL
                          AND fci.due_date < NOW()
@@ -430,9 +466,19 @@ export const payWithCredit = async (req, res) => {
 
 export const getMyInstallments = async (req, res) => {
     try {
+        await ensureCommerceTables()
         const result = await pool.query(
             `SELECT fci.*, o.total as order_total, o.created_at as order_date,
                     CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM ferre_credit_payments fcp
+                            WHERE fcp.installment_id=fci.id AND fcp.status='pending'
+                        )
+                        THEN 'webpay_pending'
+                        WHEN fci.status='active'
+                         AND fci.payment_requested_at IS NOT NULL
+                         AND fci.paid_installments < fci.installments
+                        THEN 'payment_pending'
                         WHEN fci.status='active'
                          AND fci.due_date IS NOT NULL
                          AND fci.due_date < NOW()
@@ -452,15 +498,256 @@ export const getMyInstallments = async (req, res) => {
     }
 }
 
+export const requestInstallmentPayment = async (req, res) => {
+    const { installmentId } = req.params
+
+    try {
+        await ensureCommerceTables()
+        const installment = await pool.query(
+            `SELECT *
+             FROM ferre_credit_installments
+             WHERE id=$1 AND user_id=$2
+             LIMIT 1`,
+            [installmentId, req.user.id]
+        )
+
+        if (installment.rows.length === 0) {
+            return res.status(404).json({ message: "Cuota no encontrada" })
+        }
+
+        const inst = installment.rows[0]
+        if (Number(inst.paid_installments || 0) >= Number(inst.installments || 0) || inst.status === "completed") {
+            return res.status(400).json({ message: "Esta compra ya tiene todas sus cuotas pagadas" })
+        }
+
+        if (inst.payment_requested_at) {
+            return res.status(409).json({ message: "Ya informaste un pago para esta cuota. Espera confirmacion del administrador." })
+        }
+
+        const result = await pool.query(
+            `UPDATE ferre_credit_installments
+             SET payment_requested_at=NOW()
+             WHERE id=$1 AND user_id=$2
+             RETURNING *`,
+            [installmentId, req.user.id]
+        )
+
+        res.json({
+            message: "Pago informado. El administrador debe confirmarlo.",
+            installment: result.rows[0],
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al informar pago", error: err.message })
+    }
+}
+
+export const createInstallmentWebpayPayment = async (req, res) => {
+    const { installmentId } = req.params
+    const { payment_type = "installment", amount } = req.body
+    const backendUrl = process.env.BACKEND_URL
+
+    if (!backendUrl) {
+        return res.status(500).json({ message: "BACKEND_URL no está configurado" })
+    }
+
+    try {
+        await ensureCommerceTables()
+
+        const installmentResult = await pool.query(
+            `SELECT fci.*, u.user_type, u.role
+             FROM ferre_credit_installments fci
+             JOIN users u ON u.id=fci.user_id
+             WHERE fci.id=$1 AND fci.user_id=$2
+             LIMIT 1`,
+            [installmentId, req.user.id]
+        )
+
+        if (installmentResult.rows.length === 0) {
+            return res.status(404).json({ message: "Cuota no encontrada" })
+        }
+
+        const installment = installmentResult.rows[0]
+        const userType = getApprovedProfessionalType(installment.user_type)
+        if (!["maestro", "pyme"].includes(userType)) {
+            return res.status(403).json({ message: "Solo maestros y PYMEs pueden pagar FerreCredito" })
+        }
+
+        const remainingDebt = getInstallmentDebt(installment)
+        if (remainingDebt <= 0 || installment.status === "completed") {
+            return res.status(400).json({ message: "Esta compra ya está pagada" })
+        }
+
+        const pendingPayment = await pool.query(
+            `SELECT id
+             FROM ferre_credit_payments
+             WHERE installment_id=$1 AND status='pending'
+             LIMIT 1`,
+            [installmentId]
+        )
+        if (pendingPayment.rows.length > 0) {
+            return res.status(409).json({ message: "Ya tienes un pago Webpay pendiente para esta cuota" })
+        }
+
+        let paymentAmount
+        if (payment_type === "total") {
+            paymentAmount = remainingDebt
+        } else if (payment_type === "custom") {
+            paymentAmount = Math.round(Number(amount || 0))
+        } else {
+            const nextInstallmentAmount = Math.min(Number(installment.amount_per_installment || 0), remainingDebt)
+            paymentAmount = Math.round(nextInstallmentAmount)
+        }
+
+        if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+            return res.status(400).json({ message: "Monto de pago invalido" })
+        }
+        if (paymentAmount > remainingDebt) {
+            return res.status(400).json({ message: `El monto no puede superar la deuda pendiente: $${remainingDebt.toLocaleString("es-CL")}` })
+        }
+
+        const buyOrder = `FC-${installmentId}-${Date.now()}`
+        const sessionId = `FCSESSION-${req.user.id}-${Date.now()}`
+        const returnUrl = `${backendUrl.replace(/\/$/, "")}/api/ferre-credit/payments/confirm`
+
+        const response = await tx.create(buyOrder, sessionId, paymentAmount, returnUrl)
+
+        const payment = await pool.query(
+            `INSERT INTO ferre_credit_payments (installment_id, user_id, amount, status, transbank_token, buy_order)
+             VALUES ($1, $2, $3, 'pending', $4, $5)
+             RETURNING *`,
+            [installmentId, req.user.id, paymentAmount, response.token, buyOrder]
+        )
+
+        res.status(201).json({
+            url: response.url,
+            token: response.token,
+            payment: payment.rows[0],
+        })
+    } catch (err) {
+        console.error("Error creando pago Webpay FerreCredito:", err)
+        res.status(500).json({ message: "Error al crear pago Webpay", error: err.message })
+    }
+}
+
+export const confirmInstallmentWebpayPayment = async (req, res) => {
+    const { token_ws } = req.query
+    const frontendUrl = process.env.FRONTEND_URL
+
+    if (!frontendUrl) {
+        return res.status(500).json({ message: "FRONTEND_URL no está configurado" })
+    }
+
+    if (!token_ws) {
+        return res.redirect(buildFrontendRoute(frontendUrl, "/mi-credito?payment=failure"))
+    }
+
+    const client = await pool.connect()
+
+    try {
+        await ensureCommerceTables()
+        const response = await tx.commit(token_ws)
+
+        await client.query("BEGIN")
+        const paymentResult = await client.query(
+            `SELECT fcp.*, fci.total_amount, fci.amount_per_installment, fci.installments,
+                    fci.paid_amount, fci.paid_installments, fci.status as installment_status
+             FROM ferre_credit_payments fcp
+             JOIN ferre_credit_installments fci ON fci.id=fcp.installment_id
+             WHERE fcp.transbank_token=$1 AND fcp.status='pending'
+             FOR UPDATE`,
+            [token_ws]
+        )
+
+        if (paymentResult.rows.length === 0) {
+            await client.query("ROLLBACK")
+            return res.redirect(buildFrontendRoute(frontendUrl, "/mi-credito?payment=failure"))
+        }
+
+        const payment = paymentResult.rows[0]
+
+        if (response.status !== "AUTHORIZED") {
+            await client.query(
+                "UPDATE ferre_credit_payments SET status='rejected' WHERE id=$1",
+                [payment.id]
+            )
+            await client.query("COMMIT")
+            return res.redirect(buildFrontendRoute(frontendUrl, "/mi-credito?payment=failure"))
+        }
+
+        const previousPaidAmount = Math.max(
+            Number(payment.paid_amount || 0),
+            Number(payment.paid_installments || 0) * Number(payment.amount_per_installment || 0)
+        )
+        const newPaidAmount = Math.min(previousPaidAmount + Number(payment.amount || 0), Number(payment.total_amount || 0))
+        const newPaidInstallments = calculatePaidInstallments(newPaidAmount, payment.amount_per_installment, payment.installments)
+        const newStatus = newPaidAmount >= Number(payment.total_amount || 0) ? "completed" : "active"
+
+        await client.query(
+            "UPDATE ferre_credit_payments SET status='paid' WHERE id=$1",
+            [payment.id]
+        )
+        const updatedInstallment = await client.query(
+            `UPDATE ferre_credit_installments
+             SET paid_amount=$1,
+                 paid_installments=$2,
+                 status=$3,
+                 payment_requested_at=NULL,
+                 due_date=CASE
+                    WHEN $3='completed' THEN due_date
+                    WHEN $2 > paid_installments THEN COALESCE(due_date, NOW()) + INTERVAL '30 days'
+                    ELSE due_date
+                 END
+             WHERE id=$4
+             RETURNING *`,
+            [newPaidAmount, newPaidInstallments, newStatus, payment.installment_id]
+        )
+        await client.query(
+            `UPDATE ferre_credits
+             SET balance_used=GREATEST(balance_used - $1, 0), updated_at=NOW()
+             WHERE user_id=$2`,
+            [Number(payment.amount || 0), payment.user_id]
+        )
+        await client.query("COMMIT")
+
+        if (newStatus === "active") {
+            Promise.resolve()
+                .then(async () => {
+                    const user = await pool.query("SELECT name, lastname, email FROM users WHERE id=$1", [payment.user_id])
+                    if (user.rows[0]?.email) {
+                        await sendUpcomingInstallmentEmail({
+                            to: user.rows[0].email,
+                            name: getDisplayName(user.rows[0]),
+                            installment: updatedInstallment.rows[0],
+                        })
+                    }
+                })
+                .catch((emailErr) => console.error("Error enviando proxima cuota:", emailErr.message))
+        }
+
+        return res.redirect(buildFrontendRoute(frontendUrl, "/mi-credito?payment=success"))
+    } catch (err) {
+        try {
+            await client.query("ROLLBACK")
+        } catch (rollbackErr) {
+            console.error("Error rollback pago Webpay FerreCredito:", rollbackErr.message)
+        }
+        console.error("Error confirmando pago Webpay FerreCredito:", err)
+        return res.redirect(buildFrontendRoute(frontendUrl, "/mi-credito?payment=failure"))
+    } finally {
+        client.release()
+    }
+}
+
 export const payInstallment = async (req, res) => {
     const { installmentId } = req.params
     const client = await pool.connect()
     let transactionFinished = false
     try {
+        await ensureCommerceTables()
         await client.query("BEGIN")
 
         const installment = await client.query(
-            "SELECT * FROM ferre_credit_installments WHERE id = $1",
+            "SELECT * FROM ferre_credit_installments WHERE id = $1 FOR UPDATE",
             [installmentId]
         )
         if (installment.rows.length === 0) {
@@ -469,13 +756,28 @@ export const payInstallment = async (req, res) => {
         }
 
         const inst = installment.rows[0]
-        if (inst.paid_installments >= inst.installments) {
+        const paidInstallments = Number(inst.paid_installments || 0)
+        const totalInstallments = Number(inst.installments || 0)
+        const totalAmount = Number(inst.total_amount || 0)
+        const amountPerInstallment = Number(inst.amount_per_installment || 0)
+
+        if (paidInstallments >= totalInstallments) {
             await client.query("ROLLBACK")
             return res.status(400).json({ message: "Todas las cuotas ya están pagadas" })
         }
 
-        const remainingAmount = Number(inst.total_amount) - (Number(inst.amount_per_installment) * Number(inst.paid_installments))
-        const paymentAmount = Math.min(Number(inst.amount_per_installment), remainingAmount)
+        if (!inst.payment_requested_at) {
+            await client.query("ROLLBACK")
+            return res.status(400).json({ message: "El cliente aun no ha informado el pago de esta cuota" })
+        }
+
+        const remainingAmount = totalAmount - (amountPerInstallment * paidInstallments)
+        const paymentAmount = Math.min(amountPerInstallment, remainingAmount)
+
+        if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
+            await client.query("ROLLBACK")
+            return res.status(400).json({ message: "La cuota no tiene monto pendiente" })
+        }
 
         await client.query(
             `INSERT INTO ferre_credit_payments (installment_id, user_id, amount)
@@ -483,19 +785,25 @@ export const payInstallment = async (req, res) => {
             [installmentId, inst.user_id, paymentAmount]
         )
 
-        const newPaid = inst.paid_installments + 1
-        const newStatus = newPaid >= inst.installments ? "completed" : "active"
+        const newPaid = paidInstallments + 1
+        const newStatus = newPaid >= totalInstallments ? "completed" : "active"
+        const newPaidAmount = Math.min(
+            Math.max(Number(inst.paid_amount || 0), paidInstallments * amountPerInstallment) + paymentAmount,
+            totalAmount
+        )
         const updatedInstallment = await client.query(
             `UPDATE ferre_credit_installments
-       SET paid_installments = $1,
-           status = $2,
+       SET paid_amount = $1,
+           paid_installments = $2,
+           status = $3,
            due_date = CASE
-                WHEN $2 = 'completed' THEN due_date
+                WHEN $3 = 'completed' THEN due_date
                 ELSE COALESCE(due_date, NOW()) + INTERVAL '30 days'
-           END
-       WHERE id = $3
+           END,
+           payment_requested_at = NULL
+       WHERE id = $4
        RETURNING *`,
-            [newPaid, newStatus, installmentId]
+            [newPaidAmount, newPaid, newStatus, installmentId]
         )
 
         await client.query(

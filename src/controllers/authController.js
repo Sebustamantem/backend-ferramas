@@ -132,7 +132,11 @@ export const forgotPassword = async (req, res) => {
         )
 
         if (result.rows.length === 0) {
-            return errorResponse(res, 404, "USER_NOT_REGISTERED", "Este correo no está registrado. Crea una cuenta para continuar.")
+            return res.json({
+                code: "USER_NOT_REGISTERED",
+                registered: false,
+                message: "Este correo no está registrado. Crea una cuenta para continuar.",
+            })
         }
 
         const user = result.rows[0]

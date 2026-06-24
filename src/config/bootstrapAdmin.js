@@ -142,12 +142,20 @@ export const ensureCommerceTables = async () => {
             total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
             installments INTEGER NOT NULL DEFAULT 1,
             amount_per_installment NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            paid_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
             paid_installments INTEGER NOT NULL DEFAULT 0,
             status VARCHAR(30) NOT NULL DEFAULT 'active',
             created_at TIMESTAMP DEFAULT NOW()
         )
     `)
     await pool.query("ALTER TABLE ferre_credit_installments ADD COLUMN IF NOT EXISTS due_date TIMESTAMP")
+    await pool.query("ALTER TABLE ferre_credit_installments ADD COLUMN IF NOT EXISTS paid_amount NUMERIC(12, 2) NOT NULL DEFAULT 0")
+    await pool.query("ALTER TABLE ferre_credit_installments ADD COLUMN IF NOT EXISTS payment_requested_at TIMESTAMP")
+    await pool.query(`
+        UPDATE ferre_credit_installments
+        SET paid_amount = GREATEST(paid_amount, paid_installments * amount_per_installment)
+        WHERE paid_amount = 0 AND paid_installments > 0
+    `)
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS ferre_credit_payments (
@@ -155,9 +163,15 @@ export const ensureCommerceTables = async () => {
             installment_id INTEGER REFERENCES ferre_credit_installments(id) ON DELETE CASCADE,
             user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
             amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
+            status VARCHAR(30) NOT NULL DEFAULT 'paid',
+            transbank_token TEXT,
+            buy_order TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         )
     `)
+    await pool.query("ALTER TABLE ferre_credit_payments ADD COLUMN IF NOT EXISTS status VARCHAR(30) NOT NULL DEFAULT 'paid'")
+    await pool.query("ALTER TABLE ferre_credit_payments ADD COLUMN IF NOT EXISTS transbank_token TEXT")
+    await pool.query("ALTER TABLE ferre_credit_payments ADD COLUMN IF NOT EXISTS buy_order TEXT")
 }
 
 export const bootstrapAdmin = async () => {
