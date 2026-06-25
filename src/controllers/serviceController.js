@@ -60,7 +60,10 @@ export const getServices = async (req, res) => {
              WHERE ps.is_active = TRUE
              ORDER BY ps.created_at DESC`
         )
-        res.json(result.rows)
+        res.json({
+            message: "Servicios obtenidos correctamente",
+            services: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener servicios", error: err.message })
     }
@@ -80,7 +83,10 @@ export const getMyServices = async (req, res) => {
              ORDER BY ps.created_at DESC`,
             [req.user.id]
         )
-        res.json(result.rows)
+        res.json({
+            message: "Tus servicios fueron obtenidos correctamente",
+            services: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener tus servicios", error: err.message })
     }
@@ -116,7 +122,10 @@ export const createService = async (req, res) => {
                 reference_price ? Number(reference_price) : null,
             ]
         )
-        res.status(201).json(result.rows[0])
+        res.status(201).json({
+            message: "Servicio publicado correctamente",
+            service: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al publicar servicio", error: err.message })
     }
@@ -149,7 +158,10 @@ export const updateService = async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ message: "Servicio no encontrado" })
         }
-        res.json(result.rows[0])
+        res.json({
+            message: "Servicio actualizado correctamente",
+            service: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar servicio", error: err.message })
     }
@@ -170,7 +182,10 @@ export const updateServiceStatus = async (req, res) => {
         if (result.rows.length === 0) {
             return res.status(404).json({ message: "Servicio no encontrado" })
         }
-        res.json(result.rows[0])
+        res.json({
+            message: "Estado del servicio actualizado correctamente",
+            service: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al cambiar estado del servicio", error: err.message })
     }
@@ -215,6 +230,7 @@ export const getMyServiceRequests = async (req, res) => {
             [req.user.id]
         )
         res.json({
+            message: "Solicitudes obtenidas correctamente",
             summary: summary.rows[0],
             requests: requests.rows,
         })

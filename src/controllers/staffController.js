@@ -220,6 +220,7 @@ export const getAdminDashboard = async (req, res) => {
         ])
 
         res.json({
+            message: "Dashboard admin obtenido correctamente",
             sales_today: {
                 total: Number(salesToday.rows[0]?.total || 0),
                 count: Number(salesToday.rows[0]?.count || 0),
@@ -279,7 +280,10 @@ export const getAdminActivity = async (req, res) => {
             dateTo: req.query.date_to || "",
             limit: req.query.limit || 120,
         })
-        res.json(logs)
+        res.json({
+            message: "Historial obtenido correctamente",
+            activity: logs,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener historial", error: err.message })
     }
@@ -384,6 +388,7 @@ export const getAdminNotifications = async (req, res) => {
         }
 
         res.json({
+            message: "Notificaciones obtenidas correctamente",
             counts,
             total: Object.values(counts).reduce((acc, value) => acc + Number(value || 0), 0),
             items,
@@ -461,7 +466,10 @@ export const getOrders = async (req, res) => {
        GROUP BY o.id, u.name, u.email, u.phone
        ORDER BY o.created_at DESC`
         )
-        res.json(orders.rows)
+        res.json({
+            message: "Pedidos obtenidos correctamente",
+            orders: orders.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener pedidos", error: err.message })
     }
@@ -482,7 +490,10 @@ export const updateOrderStatus = async (req, res) => {
             return res.status(404).json({ message: "Orden no encontrada" })
         notifyOrderStatus(result.rows[0].id, status)
             .catch((emailErr) => console.error("Error enviando estado de pedido:", emailErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Estado del pedido actualizado correctamente",
+            order: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar estado", error: err.message })
     }
@@ -508,7 +519,10 @@ export const getClients = async (req, res) => {
              GROUP BY u.id, up.balance, fc.credit_limit, fc.balance_used, fc.is_active
              ORDER BY u.created_at DESC`
         )
-        res.json(result.rows)
+        res.json({
+            message: "Clientes obtenidos correctamente",
+            clients: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener clientes", error: err.message })
     }
@@ -580,6 +594,7 @@ export const getClientDetail = async (req, res) => {
         }
 
         res.json({
+            message: "Ficha de cliente obtenida correctamente",
             client: client.rows[0],
             orders: orders.rows,
             points: {
@@ -602,7 +617,10 @@ export const getInventory = async (req, res) => {
         const result = await pool.query(
             "SELECT * FROM products ORDER BY stock ASC"
         )
-        res.json(result.rows)
+        res.json({
+            message: "Inventario obtenido correctamente",
+            inventory: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener inventario", error: err.message })
     }
@@ -622,7 +640,10 @@ export const getMyStockReports = async (req, res) => {
              ORDER BY sr.created_at DESC`,
             [isAdmin, req.user.id]
         )
-        res.json(result.rows)
+        res.json({
+            message: "Inventario obtenido correctamente",
+            inventory: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener tus avisos de stock", error: err.message })
     }
@@ -667,7 +688,10 @@ export const reportStockIssue = async (req, res) => {
             description: "Bodega informo producto sin stock",
             metadata: { reason: reason.trim() || "Producto no disponible" },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
-        res.status(201).json(result.rows[0])
+        res.status(201).json({
+            message: "Aviso de stock informado correctamente",
+            report: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al informar stock", error: err.message })
     }
@@ -684,7 +708,10 @@ export const getStockReports = async (req, res) => {
              LEFT JOIN users u ON u.id = sr.reported_by
              ORDER BY sr.status='pending' DESC, sr.created_at DESC`
         )
-        res.json(result.rows)
+        res.json({
+            message: "Avisos de stock obtenidos correctamente",
+            reports: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener avisos de stock", error: err.message })
     }
@@ -711,7 +738,10 @@ export const resolveStockReport = async (req, res) => {
             entityId: Number(id),
             description: "Admin marco un reporte de bodega como resuelto",
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Aviso de stock resuelto correctamente",
+            report: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al resolver aviso", error: err.message })
     }
@@ -735,7 +765,10 @@ export const updateStock = async (req, res) => {
             description: reason || "Admin actualizo stock",
             metadata: { stock: Number(stock) },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Stock actualizado correctamente",
+            product: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar stock", error: err.message })
     }
@@ -794,7 +827,11 @@ export const restockProduct = async (req, res) => {
             metadata: { previous_stock: previousStock, new_stock: newStock, reason },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
 
-        res.json({ product: updated.rows[0], movement: movement.rows[0] })
+        res.json({
+            message: "Stock repuesto correctamente",
+            product: updated.rows[0],
+            movement: movement.rows[0],
+        })
     } catch (err) {
         await client.query("ROLLBACK")
         res.status(500).json({ message: "Error al reponer stock", error: err.message })
@@ -814,7 +851,10 @@ export const getStockMovements = async (req, res) => {
              ORDER BY sm.created_at DESC
              LIMIT 120`
         )
-        res.json(result.rows)
+        res.json({
+            message: "Historial de stock obtenido correctamente",
+            movements: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener historial de stock", error: err.message })
     }
@@ -839,7 +879,10 @@ export const getOrdersForWarehouse = async (req, res) => {
        GROUP BY o.id, u.name, u.email
        ORDER BY o.created_at DESC`
         )
-        res.json(orders.rows)
+        res.json({
+            message: "Pedidos de bodega obtenidos correctamente",
+            orders: orders.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener pedidos", error: err.message })
     }
@@ -856,7 +899,10 @@ export const dispatchOrder = async (req, res) => {
             return res.status(400).json({ message: "El pedido no está en estado processing" })
         notifyOrderStatus(result.rows[0].id, "shipped")
             .catch((emailErr) => console.error("Error enviando despacho:", emailErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Pedido despachado correctamente",
+            order: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al despachar pedido", error: err.message })
     }
@@ -894,7 +940,10 @@ export const updateWarehouseOrderStatus = async (req, res) => {
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         notifyOrderStatus(result.rows[0].id, status)
             .catch((emailErr) => console.error("Error enviando estado bodega:", emailErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Estado del pedido actualizado correctamente",
+            order: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar estado del pedido", error: err.message })
     }
@@ -922,7 +971,10 @@ export const getAccountingOrders = async (req, res) => {
        GROUP BY o.id, u.name, u.email, u.phone
        ORDER BY o.created_at DESC`
         )
-        res.json(orders.rows)
+        res.json({
+            message: "Pedidos contables obtenidos correctamente",
+            orders: orders.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener pedidos contables", error: err.message })
     }
@@ -955,7 +1007,10 @@ export const confirmTransferOrder = async (req, res) => {
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         notifyOrderStatus(result.rows[0].id, "paid")
             .catch((emailErr) => console.error("Error enviando transferencia confirmada:", emailErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Transferencia confirmada correctamente",
+            order: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al confirmar transferencia", error: err.message })
     }
@@ -1010,7 +1065,10 @@ export const rejectTransferOrder = async (req, res) => {
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         notifyOrderStatus(result.rows[0].id, "cancelled")
             .catch((emailErr) => console.error("Error enviando transferencia rechazada:", emailErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Transferencia rechazada correctamente",
+            order: result.rows[0],
+        })
     } catch (err) {
         await client.query("ROLLBACK")
         res.status(500).json({ message: "Error al rechazar transferencia", error: err.message })
@@ -1040,7 +1098,10 @@ export const registerDeliveredOrder = async (req, res) => {
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
         notifyOrderStatus(result.rows[0].id, "delivered")
             .catch((emailErr) => console.error("Error enviando entrega:", emailErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Entrega registrada correctamente",
+            order: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al registrar entrega", error: err.message })
     }

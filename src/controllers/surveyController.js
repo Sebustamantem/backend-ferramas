@@ -36,6 +36,7 @@ export const getSurveySummary = async (req, res) => {
              LIMIT 50`
         )
         res.json({
+            message: "Encuestas obtenidas correctamente",
             total: Number(summary.rows[0]?.total || 0),
             average_rating: Number(summary.rows[0]?.average_rating || 0),
             comments: comments.rows,
@@ -79,7 +80,10 @@ export const submitSurvey = async (req, res) => {
              RETURNING *`,
             [req.user.id, order_id || null, score, comment || null]
         )
-        res.status(201).json(result.rows[0])
+        res.status(201).json({
+            message: "Encuesta registrada correctamente",
+            survey: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al registrar encuesta", error: err.message })
     }

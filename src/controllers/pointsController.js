@@ -28,7 +28,10 @@ export const getMyPoints = async (req, res) => {
             "SELECT balance FROM user_points WHERE user_id=$1",
             [req.user.id]
         )
-        res.json({ balance: Number(result.rows[0]?.balance || 0) })
+        res.json({
+            message: "Puntos obtenidos correctamente",
+            balance: Number(result.rows[0]?.balance || 0),
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener puntos", error: err.message })
     }

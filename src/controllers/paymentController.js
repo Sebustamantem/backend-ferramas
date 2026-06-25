@@ -120,6 +120,7 @@ export const createTransaction = async (req, res) => {
         )
 
         return res.json({
+            message: "Transacción Webpay creada correctamente",
             url: response.url,
             token: response.token,
             order_id: order.id,

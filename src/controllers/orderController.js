@@ -41,7 +41,10 @@ export const createOrder = async (req, res) => {
         }
 
         await client.query("COMMIT")
-        res.status(201).json(order)
+        res.status(201).json({
+            message: "Orden creada correctamente",
+            order,
+        })
     } catch (err) {
         await client.query("ROLLBACK")
         res.status(500).json({ message: "Error al crear orden", error: err.message })
@@ -70,7 +73,10 @@ export const getMyOrders = async (req, res) => {
        ORDER BY o.created_at DESC`,
             [req.user.id]
         )
-        res.json(orders.rows)
+        res.json({
+            message: "Órdenes obtenidas correctamente",
+            orders: orders.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener órdenes", error: err.message })
     }
@@ -95,7 +101,10 @@ export const getAllOrders = async (req, res) => {
        GROUP BY o.id, u.name, u.email
        ORDER BY o.created_at DESC`
         )
-        res.json(orders.rows)
+        res.json({
+            message: "Órdenes obtenidas correctamente",
+            orders: orders.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener órdenes", error: err.message })
     }
@@ -114,7 +123,10 @@ export const updateOrderStatus = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Orden no encontrada" })
-        res.json(result.rows[0])
+        res.json({
+            message: "Estado de orden actualizado correctamente",
+            order: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar estado", error: err.message })
     }
@@ -165,13 +177,18 @@ export const getOrderById = async (req, res) => {
             0
         )
         const calculatedPoints = calculatePointsForAmount(productTotal)
-        res.json({
+        const orderData = {
             ...order.rows[0],
             service_requests: services.rows,
             points_earned: calculatedPoints,
             points_earned_recorded: Number(pointSummary.rows[0]?.points_earned || 0),
             points_used: Number(pointSummary.rows[0]?.points_used || 0),
             points_refunded: Number(pointSummary.rows[0]?.points_refunded || 0),
+        }
+        res.json({
+            message: "Orden obtenida correctamente",
+            order: orderData,
+            ...orderData,
         })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener orden", error: err.message })

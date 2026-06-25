@@ -69,7 +69,11 @@ export const register = async (req, res) => {
             name: user.name,
             userType: user.user_type,
         }).catch((emailErr) => console.error("Error enviando bienvenida:", emailErr.message))
-        res.status(201).json({ user, token })
+        res.status(201).json({
+            message: "Usuario registrado correctamente",
+            user,
+            token,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error en el servidor", error: err.message })
     }
@@ -100,6 +104,7 @@ export const login = async (req, res) => {
             || (user.role === "admin" && normalizeRut(password) === normalizeRut(user.rut))
         const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" })
         res.json({
+            message: "Inicio de sesión correcto",
             user: {
                 id: user.id, name: user.name, lastname: user.lastname,
                 email: user.email, role: user.role, phone: user.phone,

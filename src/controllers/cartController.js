@@ -61,7 +61,10 @@ export const getCart = async (req, res) => {
              WHERE sci.user_id = $1`,
             [req.user.id]
         )
-        res.json([...products.rows, ...services.rows])
+        res.json({
+            message: "Carrito obtenido correctamente",
+            cart: [...products.rows, ...services.rows],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener carrito", error: err.message })
     }

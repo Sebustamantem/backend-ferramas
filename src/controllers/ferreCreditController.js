@@ -111,7 +111,10 @@ export const setCredit = async (req, res) => {
             approved: is_active !== false && is_active !== "false",
             creditLimit: limit,
         }).catch((emailErr) => console.error("Error enviando correo FerreCredito:", emailErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "FerreCredito configurado correctamente",
+            credit: result.rows[0],
+        })
     } catch (err) {
         try {
             await client.query("ROLLBACK")
@@ -218,7 +221,7 @@ export const getMyCredit = async (req, res) => {
             statusReason = "Tu postulacion fue rechazada o desactivada por administracion."
         }
 
-        res.json({
+        const creditData = {
             id: row.id || null,
             user_id: req.user.id,
             user_type: row.user_type,
@@ -231,6 +234,11 @@ export const getMyCredit = async (req, res) => {
             can_buy: applicationStatus === "approved" && available > 0,
             created_at: row.created_at || null,
             updated_at: row.updated_at || null,
+        }
+        res.json({
+            message: "FerreCredito obtenido correctamente",
+            credit: creditData,
+            ...creditData,
         })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener crédito", error: err.message })
@@ -245,7 +253,10 @@ export const getAllCredits = async (req, res) => {
        JOIN users u ON fc.user_id = u.id
        ORDER BY fc.created_at DESC`
         )
-        res.json(result.rows)
+        res.json({
+            message: "Créditos obtenidos correctamente",
+            credits: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener créditos", error: err.message })
     }
@@ -277,7 +288,10 @@ export const getAllInstallments = async (req, res) => {
        JOIN users u ON fci.user_id = u.id
        ORDER BY fci.created_at DESC`
         )
-        res.json(result.rows)
+        res.json({
+            message: "Cuotas obtenidas correctamente",
+            installments: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener cuotas", error: err.message })
     }
@@ -492,7 +506,10 @@ export const getMyInstallments = async (req, res) => {
        ORDER BY fci.created_at DESC`,
             [req.user.id]
         )
-        res.json(result.rows)
+        res.json({
+            message: "Cuotas obtenidas correctamente",
+            installments: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener cuotas", error: err.message })
     }
@@ -577,16 +594,12 @@ export const createInstallmentWebpayPayment = async (req, res) => {
             return res.status(400).json({ message: "Esta compra ya está pagada" })
         }
 
-        const pendingPayment = await pool.query(
-            `SELECT id
-             FROM ferre_credit_payments
-             WHERE installment_id=$1 AND status='pending'
-             LIMIT 1`,
-            [installmentId]
+        await pool.query(
+            `UPDATE ferre_credit_payments
+             SET status='rejected'
+             WHERE installment_id=$1 AND user_id=$2 AND status='pending'`,
+            [installmentId, req.user.id]
         )
-        if (pendingPayment.rows.length > 0) {
-            return res.status(409).json({ message: "Ya tienes un pago Webpay pendiente para esta cuota" })
-        }
 
         let paymentAmount
         if (payment_type === "total") {
@@ -619,6 +632,7 @@ export const createInstallmentWebpayPayment = async (req, res) => {
         )
 
         res.status(201).json({
+            message: "Pago Webpay de FerreCredito creado correctamente",
             url: response.url,
             token: response.token,
             payment: payment.rows[0],
@@ -630,7 +644,7 @@ export const createInstallmentWebpayPayment = async (req, res) => {
 }
 
 export const confirmInstallmentWebpayPayment = async (req, res) => {
-    const { token_ws } = req.query
+    const token_ws = req.query.token_ws || req.body?.token_ws
     const frontendUrl = process.env.FRONTEND_URL
 
     if (!frontendUrl) {

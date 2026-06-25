@@ -32,7 +32,10 @@ export const getAllUsers = async (req, res) => {
         const result = await pool.query(
             "SELECT id, name, lastname, email, rut, phone, role, user_type, business_name, profession, created_at FROM users ORDER BY created_at DESC"
         )
-        res.json(result.rows)
+        res.json({
+            message: "Usuarios obtenidos correctamente",
+            users: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener usuarios", error: err.message })
     }
@@ -47,7 +50,10 @@ export const getUserById = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Usuario no encontrado" })
-        res.json(result.rows[0])
+        res.json({
+            message: "Usuario obtenido correctamente",
+            user: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener usuario", error: err.message })
     }
@@ -63,7 +69,10 @@ export const updateUser = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Usuario no encontrado" })
-        res.json(result.rows[0])
+        res.json({
+            message: "Usuario actualizado correctamente",
+            user: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar usuario", error: err.message })
     }
@@ -83,7 +92,10 @@ export const updateUserRole = async (req, res) => {
             )
             if (result.rows.length === 0)
                 return res.status(404).json({ message: "Usuario no encontrado" })
-            return res.json(result.rows[0])
+            return res.json({
+                message: "Rol actualizado correctamente",
+                user: result.rows[0],
+            })
         }
 
         const result = await pool.query(
@@ -92,7 +104,10 @@ export const updateUserRole = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Usuario no encontrado" })
-        res.json(result.rows[0])
+        res.json({
+            message: "Rol actualizado correctamente",
+            user: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar rol", error: err.message })
     }
@@ -170,7 +185,10 @@ export const getMyProfile = async (req, res) => {
         )
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Usuario no encontrado" })
-        res.json(result.rows[0])
+        res.json({
+            message: "Perfil obtenido correctamente",
+            user: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener perfil", error: err.message })
     }
@@ -213,7 +231,10 @@ export const updateMyProfile = async (req, res) => {
             params = [name, lastname, email, phone, addressValue, newType, newBusiness, newProfession, req.user.id]
         }
         const result = await pool.query(query, params)
-        res.json(result.rows[0])
+        res.json({
+            message: "Perfil actualizado correctamente",
+            user: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar perfil", error: err.message })
     }
@@ -251,7 +272,10 @@ export const changeMyPassword = async (req, res) => {
             [hashed, req.user.id]
         )
 
-        res.json({ ...result.rows[0], must_change_password: false })
+        res.json({
+            message: "Contraseña cambiada con éxito",
+            user: { ...result.rows[0], must_change_password: false },
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al cambiar contraseña", error: err.message })
     }

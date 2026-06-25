@@ -45,7 +45,10 @@ export const getProducts = async (req, res) => {
         const hasPagination = req.query.page || req.query.limit
         if (!hasPagination) {
             const result = await pool.query("SELECT * FROM products ORDER BY created_at DESC")
-            return res.json(result.rows)
+            return res.json({
+                message: "Productos obtenidos correctamente",
+                products: result.rows,
+            })
         }
 
         const page = Math.max(Number(req.query.page || 1), 1)
@@ -82,7 +85,9 @@ export const getProducts = async (req, res) => {
         )
 
         res.json({
+            message: "Productos obtenidos correctamente",
             data: dataResult.rows,
+            products: dataResult.rows,
             pagination: {
                 page,
                 limit,
@@ -102,7 +107,10 @@ export const getProductById = async (req, res) => {
         const result = await pool.query("SELECT * FROM products WHERE id = $1", [id])
         if (result.rows.length === 0)
             return res.status(404).json({ message: "Producto no encontrado" })
-        res.json(result.rows[0])
+        res.json({
+            message: "Producto obtenido correctamente",
+            product: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener producto", error: err.message })
     }
@@ -126,7 +134,10 @@ export const createProduct = async (req, res) => {
             description: "Admin creo producto",
             metadata: { stock: Number(stock || 0), price: Number(price || 0) },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
-        res.status(201).json(result.rows[0])
+        res.status(201).json({
+            message: "Producto creado correctamente",
+            product: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al crear producto", error: err.message })
     }
@@ -163,7 +174,10 @@ export const updateProduct = async (req, res) => {
                 new_stock: Number(stock || 0),
             },
         }).catch((logErr) => console.error("Error registrando actividad:", logErr.message))
-        res.json(result.rows[0])
+        res.json({
+            message: "Producto actualizado correctamente",
+            product: result.rows[0],
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar producto", error: err.message })
     }
@@ -197,7 +211,10 @@ export const getMyFavoriteProducts = async (req, res) => {
              ORDER BY fp.created_at DESC`,
             [req.user.id]
         )
-        res.json(result.rows)
+        res.json({
+            message: "Favoritos obtenidos correctamente",
+            products: result.rows,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al obtener favoritos", error: err.message })
     }
@@ -218,14 +235,20 @@ export const toggleFavoriteProduct = async (req, res) => {
         )
         if (existing.rows.length > 0) {
             await pool.query("DELETE FROM favorite_products WHERE id=$1", [existing.rows[0].id])
-            return res.json({ is_favorite: false })
+            return res.json({
+                message: "Producto eliminado de favoritos",
+                is_favorite: false,
+            })
         }
 
         await pool.query(
             "INSERT INTO favorite_products (user_id, product_id) VALUES ($1, $2)",
             [req.user.id, id]
         )
-        res.status(201).json({ is_favorite: true })
+        res.status(201).json({
+            message: "Producto agregado a favoritos",
+            is_favorite: true,
+        })
     } catch (err) {
         res.status(500).json({ message: "Error al actualizar favorito", error: err.message })
     }
@@ -262,6 +285,7 @@ export const getProductReviews = async (req, res) => {
             [id]
         )
         res.json({
+            message: "Opiniones obtenidas correctamente",
             total: Number(summary.rows[0]?.total || 0),
             average_rating: Number(summary.rows[0]?.average_rating || 0),
             distribution: {
