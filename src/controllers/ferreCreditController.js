@@ -20,6 +20,7 @@ const tx = new WebpayPlus.Transaction(
 )
 
 const buildFrontendRoute = (frontendUrl, path) => `${frontendUrl.replace(/\/$/, "")}${path}`
+const WEBPAY_PENDING_MINUTES = 5
 
 const getApprovedProfessionalType = (userType) => {
     if (userType === "maestro_pending") return "maestro"
@@ -41,6 +42,16 @@ const getInstallmentDebt = (installment) => {
 const calculatePaidInstallments = (paidAmount, amountPerInstallment, installments) => {
     if (!amountPerInstallment) return 0
     return Math.min(Math.floor(Number(paidAmount || 0) / Number(amountPerInstallment || 1)), Number(installments || 0))
+}
+
+const expireOldPendingWebpayPayments = async (db = pool) => {
+    await db.query(
+        `UPDATE ferre_credit_payments
+         SET status='expired'
+         WHERE status='pending'
+           AND created_at < NOW() - ($1::text || ' minutes')::interval`,
+        [WEBPAY_PENDING_MINUTES]
+    )
 }
 
 export const setCredit = async (req, res) => {
@@ -265,12 +276,15 @@ export const getAllCredits = async (req, res) => {
 export const getAllInstallments = async (req, res) => {
     try {
         await ensureCommerceTables()
+        await expireOldPendingWebpayPayments()
         const result = await pool.query(
             `SELECT fci.*, u.name as user_name, u.email as user_email,
                     CASE
                         WHEN EXISTS (
                             SELECT 1 FROM ferre_credit_payments fcp
-                            WHERE fcp.installment_id=fci.id AND fcp.status='pending'
+                            WHERE fcp.installment_id=fci.id
+                              AND fcp.status='pending'
+                              AND fcp.created_at >= NOW() - ($1::text || ' minutes')::interval
                         )
                         THEN 'webpay_pending'
                         WHEN fci.status='active'
@@ -287,6 +301,8 @@ export const getAllInstallments = async (req, res) => {
        FROM ferre_credit_installments fci
        JOIN users u ON fci.user_id = u.id
        ORDER BY fci.created_at DESC`
+            ,
+            [WEBPAY_PENDING_MINUTES]
         )
         res.json({
             message: "Cuotas obtenidas correctamente",
@@ -481,12 +497,15 @@ export const payWithCredit = async (req, res) => {
 export const getMyInstallments = async (req, res) => {
     try {
         await ensureCommerceTables()
+        await expireOldPendingWebpayPayments()
         const result = await pool.query(
             `SELECT fci.*, o.total as order_total, o.created_at as order_date,
                     CASE
                         WHEN EXISTS (
                             SELECT 1 FROM ferre_credit_payments fcp
-                            WHERE fcp.installment_id=fci.id AND fcp.status='pending'
+                            WHERE fcp.installment_id=fci.id
+                              AND fcp.status='pending'
+                              AND fcp.created_at >= NOW() - ($2::text || ' minutes')::interval
                         )
                         THEN 'webpay_pending'
                         WHEN fci.status='active'
@@ -504,7 +523,7 @@ export const getMyInstallments = async (req, res) => {
        JOIN orders o ON fci.order_id = o.id
        WHERE fci.user_id = $1
        ORDER BY fci.created_at DESC`,
-            [req.user.id]
+            [req.user.id, WEBPAY_PENDING_MINUTES]
         )
         res.json({
             message: "Cuotas obtenidas correctamente",
@@ -569,6 +588,7 @@ export const createInstallmentWebpayPayment = async (req, res) => {
 
     try {
         await ensureCommerceTables()
+        await expireOldPendingWebpayPayments()
 
         const installmentResult = await pool.query(
             `SELECT fci.*, u.user_type, u.role
@@ -643,6 +663,34 @@ export const createInstallmentWebpayPayment = async (req, res) => {
     }
 }
 
+export const cancelInstallmentWebpayPayment = async (req, res) => {
+    const { installmentId } = req.params
+
+    try {
+        await ensureCommerceTables()
+        const result = await pool.query(
+            `UPDATE ferre_credit_payments
+             SET status='rejected'
+             WHERE installment_id=$1
+               AND user_id=$2
+               AND status='pending'
+             RETURNING *`,
+            [installmentId, req.user.id]
+        )
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ message: "No hay pago Webpay pendiente para cancelar" })
+        }
+
+        res.json({
+            message: "Pago Webpay pendiente cancelado correctamente",
+            payments_cancelled: result.rows.length,
+        })
+    } catch (err) {
+        res.status(500).json({ message: "Error al cancelar pago Webpay pendiente", error: err.message })
+    }
+}
+
 export const confirmInstallmentWebpayPayment = async (req, res) => {
     const token_ws = req.query.token_ws || req.body?.token_ws
     const frontendUrl = process.env.FRONTEND_URL
@@ -659,6 +707,15 @@ export const confirmInstallmentWebpayPayment = async (req, res) => {
 
     try {
         await ensureCommerceTables()
+        await expireOldPendingWebpayPayments()
+        const pendingPayment = await pool.query(
+            "SELECT id FROM ferre_credit_payments WHERE transbank_token=$1 AND status='pending' LIMIT 1",
+            [token_ws]
+        )
+        if (pendingPayment.rows.length === 0) {
+            return res.redirect(buildFrontendRoute(frontendUrl, "/mi-credito?payment=failure"))
+        }
+
         const response = await tx.commit(token_ws)
 
         await client.query("BEGIN")
