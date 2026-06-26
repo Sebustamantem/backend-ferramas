@@ -731,13 +731,13 @@ export const confirmInstallmentWebpayPayment = async (req, res) => {
         )
         const updatedInstallment = await client.query(
             `UPDATE ferre_credit_installments
-             SET paid_amount=$1,
-                 paid_installments=$2,
-                 status=$3,
+             SET paid_amount=$1::numeric,
+                 paid_installments=$2::integer,
+                 status=$3::varchar(30),
                  payment_requested_at=NULL,
                  due_date=CASE
-                    WHEN $3='completed' THEN due_date
-                    WHEN $2 > paid_installments THEN COALESCE(due_date, NOW()) + INTERVAL '30 days'
+                    WHEN $3::varchar(30)='completed' THEN due_date
+                    WHEN $2::integer > paid_installments THEN COALESCE(due_date, NOW()) + INTERVAL '30 days'
                     ELSE due_date
                  END
              WHERE id=$4
