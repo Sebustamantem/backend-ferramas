@@ -663,34 +663,6 @@ export const createInstallmentWebpayPayment = async (req, res) => {
     }
 }
 
-export const cancelInstallmentWebpayPayment = async (req, res) => {
-    const { installmentId } = req.params
-
-    try {
-        await ensureCommerceTables()
-        const result = await pool.query(
-            `UPDATE ferre_credit_payments
-             SET status='rejected'
-             WHERE installment_id=$1
-               AND user_id=$2
-               AND status='pending'
-             RETURNING *`,
-            [installmentId, req.user.id]
-        )
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ message: "No hay pago Webpay pendiente para cancelar" })
-        }
-
-        res.json({
-            message: "Pago Webpay pendiente cancelado correctamente",
-            payments_cancelled: result.rows.length,
-        })
-    } catch (err) {
-        res.status(500).json({ message: "Error al cancelar pago Webpay pendiente", error: err.message })
-    }
-}
-
 export const confirmInstallmentWebpayPayment = async (req, res) => {
     const token_ws = req.query.token_ws || req.body?.token_ws
     const frontendUrl = process.env.FRONTEND_URL

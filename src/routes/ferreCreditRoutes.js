@@ -2,7 +2,7 @@ import { Router } from "express"
 import {
     setCredit, getMyCredit, getAllCredits,
     payWithCredit, getMyInstallments, payInstallment, getAllInstallments, rejectCreditApplication,
-    requestInstallmentPayment, createInstallmentWebpayPayment, cancelInstallmentWebpayPayment, confirmInstallmentWebpayPayment
+    requestInstallmentPayment, createInstallmentWebpayPayment, confirmInstallmentWebpayPayment
 } from "../controllers/ferreCreditController.js"
 import { verifyToken, verifyAdmin } from "../middleware/authMiddleware.js"
 
@@ -11,7 +11,6 @@ const router = Router()
 router.get("/my", verifyToken, getMyCredit)
 router.get("/installments", verifyToken, getMyInstallments)
 router.post("/installments/:installmentId/webpay", verifyToken, createInstallmentWebpayPayment)
-router.post("/installments/:installmentId/cancel-webpay", verifyToken, cancelInstallmentWebpayPayment)
 router.post("/installments/:installmentId/request-payment", verifyToken, requestInstallmentPayment)
 router.get("/payments/confirm", confirmInstallmentWebpayPayment)
 router.post("/payments/confirm", confirmInstallmentWebpayPayment)
